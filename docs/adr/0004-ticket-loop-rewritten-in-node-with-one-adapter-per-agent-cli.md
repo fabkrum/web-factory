@@ -1,0 +1,3 @@
+# The Ticket loop is rewritten in Node, with one adapter per Agent CLI
+
+The Ticket loop is a new Node and TypeScript program, not a port of the Python ticket-loop it learns from. It carries over that tool's logic (a worktree per Ticket, a gate the script decides, review with fix rounds, parking on a decision, waiting out rate limits) and drops its wiring to Claude Code, which sat in about ten places: CLI flags, JSON fields, transcript paths, tool names and slash skills. Node because Builders already need it and a second runtime is one more thing for a full beginner to install; one adapter per Agent CLI because no two of them share flags, output or sandbox defaults.
