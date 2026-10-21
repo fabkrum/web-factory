@@ -6,3 +6,4 @@ dist/
 .claude/state/
 .claude/.cc-writes/
 .scratch/*.tmp
+.npm-cache/
