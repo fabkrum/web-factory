@@ -45,11 +45,11 @@ One step of the Pipeline; a Decision stage waits for the Builder, an Automatic s
 _Avoid_: step, phase, column
 
 **Request**:
-An idea or a bug the Builder brings to the Site, or one that Measure raises.
+An idea or a bug for the Site or for its Factory, brought by the Builder or proposed by Measure.
 _Avoid_: feature request, wish, idea
 
 **Spec**:
-A Request worked out into what the Site should do and how to tell that it does.
+A Request worked out into what the Site or its Factory should do and how to tell that it does.
 _Avoid_: PRD, requirements, plan
 
 **Ticket**:
@@ -79,6 +79,18 @@ _Avoid_: mockup, design export, Figma file
 **Pass**:
 The outcome of a Ticket whose Review checks all succeed.
 _Avoid_: green, done, merged
+
+**Measure**:
+The Stage that measures both the Site, through what Visitors experience, and the Factory, through Run reports, and proposes Requests from both.
+_Avoid_: monitoring, analytics, retro
+
+**Run report**:
+The record of how one run of the Ticket loop went: attempts, fix rounds, parked Tickets with their reasons, flaky tests, time spent waiting on rate limits, and which Review checks failed.
+_Avoid_: night report, loop report, log
+
+**Factory feedback**:
+An anonymised summary of Run reports that the Builder chooses to send to the Factory's maintainers after seeing exactly what it contains.
+_Avoid_: telemetry, analytics, crash report
 
 **Preview**:
 A non-public copy of the Site that the Builder reads at Approve.
