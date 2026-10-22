@@ -1,3 +1,4 @@
+import { isStageLabel, stageLabel, STAGES, type Stage } from "../../src/stages.ts";
 import type { Issue, IssueEvent, PullRequest, Tracker } from "../../src/tracker.ts";
 
 export interface FakeIssue extends Issue {
@@ -18,6 +19,8 @@ export interface FakePullRequest extends PullRequest {
 export class FakeTracker implements Tracker {
   readonly #issues = new Map<number, FakeIssue>();
   readonly pullRequests: FakePullRequest[] = [];
+  /** The repository's labels; like GitHub, a label is unique regardless of case. */
+  readonly #labels: string[] = [];
   #next = 1;
 
   addSpec(title: string, body = ""): number {
@@ -50,6 +53,45 @@ export class FakeTracker implements Tracker {
     const issue = this.issue(number);
     issue.state = "open";
     issue.history.push({ kind: "reopened" });
+  }
+
+  /** The Builder creates a label by hand. */
+  createLabel(name: string): void {
+    if (!this.#hasLabel(name)) this.#labels.push(name);
+  }
+
+  /** The Builder deletes a label by hand; like GitHub, it leaves every issue too. */
+  deleteLabel(name: string): void {
+    const same = (label: string) => label.toLowerCase() === name.toLowerCase();
+    this.#labels.splice(0, this.#labels.length, ...this.#labels.filter((label) => !same(label)));
+    for (const issue of this.#issues.values()) issue.labels = issue.labels.filter((label) => !same(label));
+  }
+
+  async createIssue({ title, body, stage, parent }: { title: string; body: string; stage: Stage; parent?: number }): Promise<number> {
+    if (parent !== undefined) this.issue(parent);
+    return this.#add({ title, body, labels: [stageLabel(stage)], parent });
+  }
+
+  async addBlocker(number: number, blocker: number): Promise<void> {
+    this.issue(blocker);
+    const issue = this.issue(number);
+    if (!issue.blockedBy.includes(blocker)) issue.blockedBy.push(blocker);
+  }
+
+  async moveToStage(number: number, stage: Stage): Promise<void> {
+    const issue = this.issue(number);
+    issue.labels = [...issue.labels.filter((label) => !isStageLabel(label)), stageLabel(stage)];
+    this.createLabel(stageLabel(stage));
+  }
+
+  async ensureStageLabels(): Promise<string[]> {
+    const missing = STAGES.map(stageLabel).filter((label) => !this.#hasLabel(label));
+    for (const label of missing) this.createLabel(label);
+    return missing;
+  }
+
+  async labels(): Promise<string[]> {
+    return [...this.#labels];
   }
 
   async ticketsOf(spec: number): Promise<Issue[]> {
@@ -94,10 +136,34 @@ export class FakeTracker implements Tracker {
   #add(fields: { title: string; body: string; labels: string[]; parent?: number }): number {
     const number = this.#next++;
     this.#issues.set(number, { number, state: "open", comments: [], history: [], blockedBy: [], ...fields });
+    // GitHub creates a label that an issue is filed with when the repository lacks it.
+    for (const label of fields.labels) this.createLabel(label);
     return number;
+  }
+
+  #hasLabel(name: string): boolean {
+    return this.#labels.some((label) => label.toLowerCase() === name.toLowerCase());
   }
 
   #copy({ number, title, body, state, labels, blockedBy }: FakeIssue): Issue {
     return { number, title, body, state, labels: [...labels], blockedBy: [...blockedBy] };
   }
+}
+
+/** Every method of a tracker, bound to it, so a test can override one or two of them. */
+export function delegateTo(tracker: Tracker): Tracker {
+  return {
+    createIssue: (issue) => tracker.createIssue(issue),
+    addBlocker: (issue, blocker) => tracker.addBlocker(issue, blocker),
+    moveToStage: (issue, stage) => tracker.moveToStage(issue, stage),
+    ensureStageLabels: () => tracker.ensureStageLabels(),
+    labels: () => tracker.labels(),
+    ticketsOf: (spec) => tracker.ticketsOf(spec),
+    getIssue: (issue) => tracker.getIssue(issue),
+    historyOf: (issue) => tracker.historyOf(issue),
+    comment: (issue, body) => tracker.comment(issue, body),
+    close: (issue) => tracker.close(issue),
+    pullRequestFrom: (head) => tracker.pullRequestFrom(head),
+    openPullRequest: (pullRequest) => tracker.openPullRequest(pullRequest),
+  };
 }

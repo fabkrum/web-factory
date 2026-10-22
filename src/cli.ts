@@ -9,7 +9,7 @@ export interface FactoryDeps {
   cwd: string;
   /** Missing until the Builder's Agent CLI adapter exists. */
   agentCli?: AgentCli;
-  /** Missing until the GitHub tracker exists. */
+  /** The Site's issues on GitHub (the GitHub tracker), or a fake in tests. */
   tracker?: Tracker;
   /** Missing until the Builder's host adapter exists. */
   host?: Host;
@@ -52,7 +52,7 @@ async function loop(spec: number, deps: FactoryDeps): Promise<number> {
   try {
     const config = await readSiteConfig(deps.cwd);
     if (!deps.agentCli || !deps.tracker || !deps.host) {
-      deps.stderr("This version of the Factory cannot reach an Agent CLI, GitHub or a host yet, so factory loop cannot run.\n");
+      deps.stderr("This version of the Factory cannot reach an Agent CLI or a host yet, so factory loop cannot run.\n");
       return 1;
     }
     const result = await runTicketLoop({

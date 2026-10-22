@@ -1,3 +1,5 @@
+import type { Stage } from "./stages.ts";
+
 /** A Request, Spec or Ticket as the tracker holds it. */
 export interface Issue {
   number: number;
@@ -20,6 +22,19 @@ export interface PullRequest {
 
 /** The boundary to wherever the Site's issues live (GitHub, through its CLI). */
 export interface Tracker {
+  /**
+   * Files a Request, Spec or Ticket in its Stage. With a `parent` (a Ticket's Spec) the new
+   * issue becomes the parent's sub-issue. Returns its number.
+   */
+  createIssue(issue: { title: string; body: string; stage: Stage; parent?: number }): Promise<number>;
+  /** Records that `blocker` blocks `issue` (on GitHub, a native issue dependency). */
+  addBlocker(issue: number, blocker: number): Promise<void>;
+  /** Moves an issue to a Stage: its one Stage label is replaced, its other labels stay. */
+  moveToStage(issue: number, stage: Stage): Promise<void>;
+  /** Creates the Stage labels the repository is missing and returns their names; never duplicates one. */
+  ensureStageLabels(): Promise<string[]>;
+  /** Every label the repository has. */
+  labels(): Promise<string[]>;
   /** The Tickets of a Spec: its sub-issues, open or closed. */
   ticketsOf(spec: number): Promise<Issue[]>;
   /** Any issue by its number, such as a Spec or a blocker outside the Spec. */

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Tracker } from "../src/tracker.ts";
 import { FakeAgentCli } from "./harness/fake-agent-cli.ts";
-import { FakeTracker } from "./harness/fake-tracker.ts";
+import { delegateTo, FakeTracker } from "./harness/fake-tracker.ts";
 import { runFactory } from "./harness/run-factory.ts";
 import { commitFile, createSiteRepo, git, writeFile } from "./harness/site-repo.ts";
 
@@ -122,12 +122,7 @@ describe("factory loop with one Ticket", () => {
       ticketCommit = commitFile(cwd, "index.html", "<h1>hello</h1>\n");
     });
     const closeFails: Tracker = {
-      ticketsOf: (n) => tracker.ticketsOf(n),
-      getIssue: (n) => tracker.getIssue(n),
-      pullRequestFrom: (head) => tracker.pullRequestFrom(head),
-      openPullRequest: (pr) => tracker.openPullRequest(pr),
-      historyOf: (n) => tracker.historyOf(n),
-      comment: (n, body) => tracker.comment(n, body),
+      ...delegateTo(tracker),
       close: async () => {
         throw new Error("GitHub is down");
       },
@@ -151,12 +146,7 @@ describe("factory loop with one Ticket", () => {
     const site = createSiteRepo({ testCommand: TEST_COMMAND, maxAttempts: 1 });
     const { tracker, spec, ticket } = oneTicketSpec();
     const closesThenFails: Tracker = {
-      ticketsOf: (n) => tracker.ticketsOf(n),
-      getIssue: (n) => tracker.getIssue(n),
-      pullRequestFrom: (head) => tracker.pullRequestFrom(head),
-      openPullRequest: (pr) => tracker.openPullRequest(pr),
-      historyOf: (n) => tracker.historyOf(n),
-      comment: (n, body) => tracker.comment(n, body),
+      ...delegateTo(tracker),
       close: async (n) => {
         await tracker.close(n);
         throw new Error("GitHub timed out");
@@ -187,16 +177,11 @@ describe("factory loop with one Ticket", () => {
       ticketCommit = commitFile(cwd, "index.html", "<h1>hello</h1>\n");
     });
     const commentsThenFails: Tracker = {
-      ticketsOf: (n) => tracker.ticketsOf(n),
-      getIssue: (n) => tracker.getIssue(n),
-      pullRequestFrom: (head) => tracker.pullRequestFrom(head),
-      openPullRequest: (pr) => tracker.openPullRequest(pr),
-      historyOf: (n) => tracker.historyOf(n),
+      ...delegateTo(tracker),
       comment: async (n, body) => {
         await tracker.comment(n, body);
         throw new Error("GitHub timed out");
       },
-      close: (n) => tracker.close(n),
     };
 
     await expect(runFactory(["loop", String(spec)], { cwd: site, agentCli: first, tracker: commentsThenFails })).rejects.toThrow(/timed out/);
@@ -228,16 +213,11 @@ describe("factory loop with one Ticket", () => {
       commitFile(cwd, "index.html", "<h1>hello</h1>\n");
     });
     const commentsThenFails: Tracker = {
-      ticketsOf: (n) => tracker.ticketsOf(n),
-      getIssue: (n) => tracker.getIssue(n),
-      pullRequestFrom: (head) => tracker.pullRequestFrom(head),
-      openPullRequest: (pr) => tracker.openPullRequest(pr),
-      historyOf: (n) => tracker.historyOf(n),
+      ...delegateTo(tracker),
       comment: async (n, body) => {
         await tracker.comment(n, body);
         throw new Error("GitHub timed out");
       },
-      close: (n) => tracker.close(n),
     };
 
     await expect(runFactory(["loop", String(spec)], { cwd: site, agentCli: first, tracker: commentsThenFails })).rejects.toThrow(/timed out/);
