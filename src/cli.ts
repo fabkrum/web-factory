@@ -1,6 +1,8 @@
 import type { AgentCli } from "./agent-cli.ts";
 import { systemClock, type Clock } from "./clock.ts";
-import { ConfigError, readSiteConfig } from "./config.ts";
+import { access } from "node:fs/promises";
+import { join } from "node:path";
+import { CONFIG_FILE, ConfigError, readSiteConfig } from "./config.ts";
 import { ReviewError } from "./review/check.ts";
 import { formatReport } from "./review/report.ts";
 import { REVIEW_CHECKS, runReview } from "./review/review.ts";
@@ -30,7 +32,9 @@ export const USAGE = `Usage:
   factory --help                  Show this help
 
 factory review checks every route its Site links to; a route is the URL's path
-without query string and without a trailing slash (the root stays /).
+without query string and without a trailing slash (the root stays /). Run from a
+Site's folder (where its factory.json is), it also runs the Site's own tests and
+checks its dependencies for known advisories; anywhere else those two are not run.
 Review checks: ${REVIEW_CHECKS.map((check) => check.id).join(", ")}.
 
 Exit codes of factory review: 0 the Site Passes, 1 it did not pass, 2 wrong usage,
@@ -133,7 +137,8 @@ async function review(args: string[], deps: FactoryDeps): Promise<number> {
     return 2;
   }
   try {
-    const report = await runReview(url, checks);
+    const repo = await access(join(deps.cwd, CONFIG_FILE)).then(() => deps.cwd, () => undefined);
+    const report = await runReview(url, checks, repo);
     deps.stdout(json ? `${JSON.stringify(report, null, 2)}\n` : formatReport(report));
     return report.passed ? 0 : 1;
   } catch (error) {

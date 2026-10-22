@@ -15,6 +15,18 @@ const TYPES: Record<string, string> = {
   ".txt": "text/plain; charset=utf-8",
 };
 
+/**
+ * The security headers a well-set-up host sends with every answer, so every
+ * fixture passes the security headers check. The policy allows inline scripts
+ * and styles because the fixtures carry theirs inline. A fixture overrides them
+ * with a headers.json of its own; null leaves a header out.
+ */
+const SECURITY_HEADERS: Record<string, string> = {
+  "content-security-policy":
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+  "x-content-type-options": "nosniff",
+};
+
 export interface ServedSite {
   url: string;
   close: () => Promise<void>;
@@ -24,11 +36,18 @@ export interface ServedSite {
  * Serves one fixture Site from test/fixtures/sites/<name> on a free local port,
  * the way a well-set-up static host does: a folder's index.html answers at the
  * folder's address with a trailing slash, and the other forms of that address
- * redirect there, so every page has one URL unless a fixture copies it.
+ * redirect there, so every page has one URL unless a fixture copies it. Every
+ * answer carries the security headers, unless the fixture's headers.json says
+ * otherwise.
  */
 export async function serveFixtureSite(name: string): Promise<ServedSite> {
   const root = join(FIXTURES, name);
+  const overrides = await readFile(join(root, "headers.json"), "utf8").then((text) => JSON.parse(text) as Record<string, string | null>, () => ({}));
+  const headers = Object.fromEntries(
+    Object.entries({ ...SECURITY_HEADERS, ...overrides }).filter((entry): entry is [string, string] => entry[1] !== null),
+  );
   const server = createServer(async (request, response) => {
+    for (const [header, value] of Object.entries(headers)) response.setHeader(header, value);
     const path = decodeURIComponent(new URL(request.url ?? "/", "http://fixture").pathname);
     if (path.endsWith("/index.html")) return redirect(response, path.slice(0, -"index.html".length));
     if (!path.endsWith("/") && (await isFolder(join(root, normalize(path))))) return redirect(response, `${path}/`);

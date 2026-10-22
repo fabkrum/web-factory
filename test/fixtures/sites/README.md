@@ -22,3 +22,15 @@ review runs on a Preview or localhost while the tags name the live Site. The
 fixture server redirects a folder's `index.html` and a folder without its
 trailing slash, as a well-set-up static host does, so `duplicate-url` is the only
 fixture with a page at two URLs (its `about/index.html` copies `about.html`).
+
+The fixture server also sends the security headers a well-set-up host sends
+(a Content-Security-Policy and `X-Content-Type-Options: nosniff`) with every
+answer. A fixture changes them with a `headers.json` of its own, where `null`
+leaves a header out: `missing-csp` is served without its Content-Security-Policy, and with
+`X-Frame-Options` in place of the policy's `frame-ancestors`, so the policy is all it lacks.
+
+The Code & security checks that read the Site's repository (its own tests and
+its dependency advisories) take a Site repository from `../repos`, not a fixture
+Site: `clean` passes, `red-tests` has a test command that fails,
+`vulnerable-dependency` locks a version the fake npm registry has an advisory
+for, and `no-lockfile` has no `package-lock.json`.

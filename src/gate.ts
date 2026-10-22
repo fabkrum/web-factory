@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
 import { git, gitSucceeds } from "./git.ts";
+import { runShell } from "./shell.ts";
 
 /** A green gate names the commit it tested, so that exact commit is what gets merged. */
 export type GateResult = { passed: true; head: string } | { passed: false; reason: string };
@@ -57,17 +57,6 @@ export async function runGate(
   }
 
   return { passed: true, head: await git(worktree, "rev-parse", "HEAD") };
-}
-
-function runShell(cwd: string, command: string): Promise<{ exitCode: number; output: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("sh", ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
-    let output = "";
-    child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString()));
-    child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString()));
-    child.on("error", reject);
-    child.on("close", (code, signal) => resolve({ exitCode: code ?? (signal ? 128 : 1), output }));
-  });
 }
 
 function fence(text: string): string {

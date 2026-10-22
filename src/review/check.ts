@@ -28,6 +28,8 @@ export interface SiteUnderReview {
   /** Every route found on the Site, e.g. "/" or "/about.html". */
   routes: Route[];
   browser: Browser;
+  /** The Site's repository folder (where its factory.json is), when the review runs from one. */
+  repo?: string;
 }
 
 /** One measurement in a Review area, made by a tool: no failures means it passes. */
@@ -35,6 +37,8 @@ export interface ReviewCheck {
   id: string;
   name: string;
   area: ReviewArea;
+  /** True for a check that reads the Site's repository (its tests, its dependencies): it runs only when there is one. */
+  needsRepo?: boolean;
   run(site: SiteUnderReview): Promise<Failure[]>;
 }
 

@@ -7,6 +7,7 @@ export interface Fetched {
   /** Where the address ended up after redirects. */
   url: URL;
   contentType: string;
+  headers: Headers;
   body: string;
 }
 
@@ -21,6 +22,7 @@ export async function fetchFromSite(url: URL): Promise<Fetched | undefined> {
       status: response.status,
       url: new URL(response.url || url.href),
       contentType: response.headers.get("content-type") ?? "",
+      headers: response.headers,
       body: await response.text(),
     };
   } catch {
