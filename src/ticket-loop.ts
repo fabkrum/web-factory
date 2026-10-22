@@ -66,6 +66,16 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<boolean
   const { siteDir, spec, config, agentCli, tracker, log } = options;
   const integration = integrationBranch(spec);
   const branch = ticketBranch(ticket.number);
+
+  const unfinished = await gitSucceeds(siteDir, "rev-parse", "--verify", "--quiet", passRef(ticket.number));
+  if (unfinished) {
+    log(`Ticket #${ticket.number}: its Pass broke off last run, finishing it`);
+    const head = await git(siteDir, "rev-parse", passRef(ticket.number));
+    const base = await git(siteDir, "rev-parse", integration);
+    await finishPass(ticket, options, head, base);
+    return true;
+  }
+
   const worktree = await openWorktree(siteDir, ticket.number, integration);
   const base = await git(siteDir, "rev-parse", integration);
   log(`Ticket #${ticket.number}: building on ${branch} in ${relative(siteDir, worktree)}`);
@@ -76,7 +86,7 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<boolean
     sandbox: true,
     timeoutMs: config.sessionTimeoutMs,
   });
-  const gate = await judge(session, worktree, base, config.testCommand);
+  const gate = await judge(session, worktree, base, branch, config.testCommand);
 
   if (!gate.passed) {
     log(`Ticket #${ticket.number}: not passed. ${firstLine(gate.reason)}`);
@@ -87,21 +97,49 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<boolean
     return false;
   }
 
-  const head = await fastForward(siteDir, integration, base, branch);
-  await git(siteDir, "worktree", "remove", worktree);
+  // Recorded before anything moves, so a run that dies partway through the Pass finishes it next time.
+  await git(siteDir, "update-ref", passRef(ticket.number), gate.head);
+  await finishPass(ticket, options, gate.head, base);
+  return true;
+}
+
+/** Where a green gate leaves the commit it tested until the Pass is complete. */
+const passRef = (ticket: number): string => `refs/factory/pass/ticket-${ticket}`;
+
+/**
+ * The steps of a Pass after the gate: merge the tested commit, remove the worktree,
+ * comment, close. Each step holds when it is repeated, so a rerun can finish a Pass.
+ */
+async function finishPass(ticket: Issue, options: LoopOptions, head: string, base: string): Promise<void> {
+  const { siteDir, spec, tracker, log } = options;
+  const integration = integrationBranch(spec);
+  const branch = ticketBranch(ticket.number);
+
+  if (!(await gitSucceeds(siteDir, "merge-base", "--is-ancestor", head, integration))) {
+    await fastForward(siteDir, integration, base, branch, head);
+  }
+  const worktree = await worktreeOf(siteDir, branch);
+  // The tested commit is in the integration branch now, so whatever the tests left behind may go.
+  if (worktree) await git(siteDir, "worktree", "remove", "--force", worktree);
   await tracker.comment(
     ticket.number,
     `Pass. The Ticket loop built this Ticket on \`${branch}\`, its gate was green, and \`${integration}\` now contains it (${head.slice(0, 7)}).`,
   );
   await tracker.close(ticket.number);
+  await git(siteDir, "update-ref", "-d", passRef(ticket.number));
   log(`Ticket #${ticket.number}: Pass, now in ${integration}`);
-  return true;
 }
 
-async function judge(session: SessionResult, worktree: string, base: string, testCommand: string): Promise<GateResult> {
+async function judge(
+  session: SessionResult,
+  worktree: string,
+  base: string,
+  branch: string,
+  testCommand: string,
+): Promise<GateResult> {
   switch (session.kind) {
     case "done":
-      return runGate(worktree, base, testCommand);
+      return runGate(worktree, base, branch, testCommand);
     case "failed":
       return { passed: false, reason: `The Build session failed: ${session.reason}` };
     case "rate-limited":
@@ -129,9 +167,8 @@ async function openWorktree(siteDir: string, ticket: number, integration: string
   return path;
 }
 
-/** Moves the integration branch to the Ticket's head, only if that is a fast-forward. */
-async function fastForward(siteDir: string, integration: string, base: string, branch: string): Promise<string> {
-  const head = await git(siteDir, "rev-parse", branch);
+/** Moves the integration branch to the commit the gate tested, only if that is a fast-forward. */
+async function fastForward(siteDir: string, integration: string, base: string, branch: string, head: string): Promise<void> {
   if (!(await gitSucceeds(siteDir, "merge-base", "--is-ancestor", base, head))) {
     throw new LoopError(`${branch} does not build on ${integration}, so it cannot be fast-forwarded into it.`);
   }
@@ -139,7 +176,6 @@ async function fastForward(siteDir: string, integration: string, base: string, b
     throw new LoopError(`${integration} is checked out in a worktree, so the Ticket loop will not move it. Switch that worktree to another branch.`);
   }
   await git(siteDir, "update-ref", `refs/heads/${integration}`, head, base);
-  return head;
 }
 
 /** Keeps `.factory/` out of `git status` without touching any committed file. */

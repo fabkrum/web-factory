@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import type { Tracker } from "../src/tracker.ts";
 import { FakeAgentCli } from "./harness/fake-agent-cli.ts";
 import { FakeTracker } from "./harness/fake-tracker.ts";
 import { runFactory } from "./harness/run-factory.ts";
@@ -84,6 +85,61 @@ describe("factory loop with one Ticket", () => {
 
     expectNoPass(run.exitCode, tracker, ticket, /test command `grep -q hello index\.html` is red/i);
     expectIntegrationBranchUnchanged(site, spec);
+  });
+
+  it("does not Pass a Ticket whose test command leaves a file behind", async () => {
+    const site = createSiteRepo({ testCommand: `${TEST_COMMAND} && touch report.txt` });
+    const { tracker, spec, ticket } = oneTicketSpec();
+    const agentCli = new FakeAgentCli(({ cwd }) => {
+      commitFile(cwd, "index.html", "<h1>hello</h1>\n");
+    });
+
+    const run = await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
+
+    expectNoPass(run.exitCode, tracker, ticket, /report\.txt/);
+    expectIntegrationBranchUnchanged(site, spec);
+  });
+
+  it("does not Pass a Ticket whose session committed on another branch", async () => {
+    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const { tracker, spec, ticket } = oneTicketSpec();
+    const agentCli = new FakeAgentCli(({ cwd }) => {
+      git(cwd, "checkout", "--quiet", "-b", "other");
+      commitFile(cwd, "index.html", "<h1>hello</h1>\n");
+    });
+
+    const run = await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
+
+    expectNoPass(run.exitCode, tracker, ticket, /not on `ticket\/\d+`/);
+    expectIntegrationBranchUnchanged(site, spec);
+  });
+
+  it("finishes on the next run a Pass that broke off after the fast-forward", async () => {
+    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const { tracker, spec, ticket } = oneTicketSpec();
+    let ticketCommit = "";
+    const agentCli = new FakeAgentCli(({ cwd }) => {
+      ticketCommit = commitFile(cwd, "index.html", "<h1>hello</h1>\n");
+    });
+    const closeFails: Tracker = {
+      ticketsOf: (n) => tracker.ticketsOf(n),
+      comment: (n, body) => tracker.comment(n, body),
+      close: async () => {
+        throw new Error("GitHub is down");
+      },
+    };
+
+    await expect(runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker: closeFails })).rejects.toThrow(/GitHub is down/);
+    expect(git(site, "rev-parse", `spec/${spec}`)).toBe(ticketCommit);
+    expect(tracker.issue(ticket).state).toBe("open");
+
+    const rerun = await runFactory(["loop", String(spec)], { cwd: site, agentCli: new FakeAgentCli(), tracker });
+
+    expect(rerun.exitCode, rerun.stderr).toBe(0);
+    expect(tracker.issue(ticket).state).toBe("closed");
+    expect(tracker.issue(ticket).comments.every((comment) => /^Pass/.test(comment))).toBe(true);
+    expect(git(site, "rev-parse", `spec/${spec}`)).toBe(ticketCommit);
+    expect(existsSync(`${site}/.factory/worktrees/ticket-${ticket}`)).toBe(false);
   });
 
   it("does not Pass a Ticket whose session failed", async () => {
