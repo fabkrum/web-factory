@@ -1,5 +1,5 @@
 import axe, { type AxeResults, type NodeResult, type Result } from "axe-core";
-import { openReviewPage, settled } from "./browser.ts";
+import { goTo, openReviewPage, PageError, reopen, settled } from "./browser.ts";
 import type { Failure, ReviewCheck } from "./check.ts";
 
 /**
@@ -36,22 +36,32 @@ export const axeCheck: ReviewCheck = {
   area: "Accessibility",
   async run(site) {
     const failures: Failure[] = [];
-    const page = await openReviewPage(site.browser);
+    let page = await openReviewPage(site.browser);
     try {
       for (const route of site.routes) {
-        await page.goto(new URL(route, site.url).href, { waitUntil: "load" });
-        const results = await settled(page, async () => {
-          await page.addScriptTag({ content: axe.source });
-          return page.evaluate(
-            (tags) =>
-              (globalThis as unknown as { axe: typeof axe }).axe.run(document, {
-                runOnly: { type: "tag", values: tags },
-                resultTypes: ["violations"],
-              }),
-            WCAG_TAGS,
-          );
-        });
-        failures.push(...failuresOn(route, results));
+        if (route.problem) {
+          failures.push({ reason: route.problem, location: route.path });
+          continue;
+        }
+        try {
+          await goTo(page, route.address);
+          const results = await settled(page, async () => {
+            await page.addScriptTag({ content: axe.source });
+            return page.evaluate(
+              (tags) =>
+                (globalThis as unknown as { axe: typeof axe }).axe.run(document, {
+                  runOnly: { type: "tag", values: tags },
+                  resultTypes: ["violations"],
+                }),
+              WCAG_TAGS,
+            );
+          });
+          failures.push(...failuresOn(route.path, results));
+        } catch (error) {
+          if (!(error instanceof PageError)) throw error;
+          failures.push({ reason: error.message, location: route.path });
+          page = await reopen(page);
+        }
       }
     } finally {
       await page.context().close();

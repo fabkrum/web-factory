@@ -27,6 +27,9 @@ export const USAGE = `Usage:
   factory review <url> [--json]   Run every Review check on the Site served at <url>
   factory --help                  Show this help
 
+factory review checks every route its Site links to; a route is the URL's path
+without query string and without a trailing slash (the root stays /).
+
 Exit codes of factory review: 0 the Site Passes, 1 it did not pass, 2 wrong usage,
 3 the review could not run (the Site could not be opened or the review stopped).
 `;

@@ -16,6 +16,7 @@ export interface CheckResult {
 export interface ReviewReport {
   /** The address the Site answered at after any redirect. */
   url: string;
+  /** Every route checked, e.g. "/" or "/about.html". */
   routes: string[];
   /** True when every Review check passed: the Site Passes. */
   passed: boolean;
@@ -38,7 +39,7 @@ export async function runReview(url: URL, checks: ReviewCheck[] = REVIEW_CHECKS)
       area,
       checks: checks.filter((check) => check.area === area).map((check) => results.get(check)!),
     }));
-    return { url: siteUrl.href, routes, passed: [...results.values()].every((result) => result.passed), areas };
+    return { url: siteUrl.href, routes: routes.map((route) => route.path), passed: [...results.values()].every((result) => result.passed), areas };
   } finally {
     await browser.close();
   }

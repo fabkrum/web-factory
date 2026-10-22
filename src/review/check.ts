@@ -12,12 +12,21 @@ export interface Failure {
   location: string;
 }
 
+/** One route of the Site, and the address it first opened as a page at, where checks open it. */
+export interface Route {
+  /** The URL's path without query string and without a trailing slash; the root stays "/". */
+  path: string;
+  address: URL;
+  /** Why the page failed to open when the routes were found, in plain language; checks report it instead of opening it again. */
+  problem?: string;
+}
+
 /** The served Site a Review check measures. */
 export interface SiteUnderReview {
   /** Where the address the Builder gave ended up after redirects; the routes are on its origin. */
   url: URL;
-  /** Every route found on the Site, as the path and query it answered at, e.g. "/about.html" or "/?p=2". */
-  routes: string[];
+  /** Every route found on the Site, e.g. "/" or "/about.html". */
+  routes: Route[];
   browser: Browser;
 }
 

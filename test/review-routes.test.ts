@@ -79,10 +79,13 @@ describe("factory review finds the Site's routes", () => {
     expect(axeLocations(report!).map((location) => location.split(" ")[0])).toEqual(["/posts/node.js", "/v1.2", "/about.aspx"]);
   });
 
-  it("counts one page once, whatever query string, index.html or trailing slash its links use", async () => {
-    const about = page("About", ["/"], { faint: true });
-    const home = page("Home", ["/", "/index.html", "/?utm=1", "/?utm=2", "/about", "/about/", "/about/index.html?x=1"]);
-    const site = await serve({ "/": home, "/index.html": home, "/about": about, "/about/": about, "/about/index.html": about });
+  it("counts one page once, whatever query string or trailing slash its links use, even when its HTML changes on every request", async () => {
+    const about: Answer = (_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(page(`About ${Math.random()}`, ["/"], { faint: true }));
+    };
+    const home = page("Home", ["/", "/?utm=1", "/?utm=2", "/about", "/about/", "/about?x=1", "/about/?x=2"]);
+    const site = await serve({ "/": home, "/about": about, "/about/": about });
 
     const { report } = await reviewJson(site.url);
 
@@ -109,7 +112,7 @@ describe("factory review finds the Site's routes", () => {
     expect(axeLocations(report!)).toEqual([expect.stringMatching(/^\/about /)]);
   });
 
-  it("keeps a page whose query string changes the document as its own route, and checks it there", async () => {
+  it("counts pages that differ only in their query string as one route, checked where it was first found", async () => {
     const site = await serve({
       "/": (request, response) => {
         const second = new URL(request.url ?? "/", "http://site").searchParams.get("p") === "2";
@@ -120,12 +123,11 @@ describe("factory review finds the Site's routes", () => {
 
     const { run, report } = await reviewJson(site.url);
 
-    expect(run.exitCode).toBe(1);
-    expect(report!.routes).toEqual(["/", "/?p=2"]);
-    expect(axeLocations(report!)).toEqual([expect.stringMatching(/^\/\?p=2 /)]);
+    expect(run.exitCode).toBe(0);
+    expect(report!.routes).toEqual(["/"]);
   });
 
-  it("checks a linked page under its query string, not under its bare path", async () => {
+  it("checks a linked page at the address it was found at, query string and all", async () => {
     const site = await serve({
       "/": page("Home", ["/product?id=3"]),
       "/product": (request, response) => {
@@ -141,7 +143,7 @@ describe("factory review finds the Site's routes", () => {
     const { run, report } = await reviewJson(site.url);
 
     expect(run.exitCode).toBe(0);
-    expect(report!.routes).toEqual(["/", "/product?id=3"]);
+    expect(report!.routes).toEqual(["/", "/product"]);
   });
 
   it("checks a start address with a query string at that address", async () => {
@@ -156,8 +158,8 @@ describe("factory review finds the Site's routes", () => {
     const { run, report } = await reviewJson(`${site.url}?lang=de`);
 
     expect(run.exitCode).toBe(1);
-    expect(report!.routes).toEqual(["/?lang=de"]);
-    expect(axeLocations(report!)).toEqual([expect.stringMatching(/^\/\?lang=de /)]);
+    expect(report!.routes).toEqual(["/"]);
+    expect(axeLocations(report!)).toEqual([expect.stringMatching(/^\/ /)]);
   });
 
   it("still tries the other form of a page when the first form it meets fails", async () => {
@@ -166,7 +168,7 @@ describe("factory review finds the Site's routes", () => {
     const { run, report } = await reviewJson(site.url);
 
     expect(run.exitCode).toBe(1);
-    expect(report!.routes).toEqual(["/", "/docs/"]);
+    expect(report!.routes).toEqual(["/", "/docs"]);
   });
 
   it("reviews a page that sends the browser on with a meta refresh, at the page it lands on", async () => {
@@ -206,6 +208,107 @@ describe("factory review finds the Site's routes", () => {
   });
 });
 
+describe("factory review when one page fails", () => {
+  function failures(report: JsonReport) {
+    return report.areas.flatMap((area) => area.checks).find((check) => check.id === "accessibility/axe")!.failures;
+  }
+
+  it("reports a page that stops answering as that page's failure, and checks the others", async () => {
+    let flakyRequests = 0;
+    const site = await serve({
+      "/": page("Home", ["/flaky", "/about"]),
+      "/flaky": (_request, response) => {
+        flakyRequests += 1;
+        if (flakyRequests > 1) return response.destroy();
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(page("Flaky", ["/"]));
+      },
+      "/about": page("About", ["/"], { faint: true }),
+    });
+
+    const { run, report } = await reviewJson(site.url);
+
+    expect(run.stderr).toBe("");
+    expect(run.exitCode).toBe(1);
+    expect(report!.routes).toEqual(["/", "/flaky", "/about"]);
+    expect(failures(report!)).toEqual([
+      { location: "/flaky", reason: expect.stringMatching(/^The review could not open this page \(net::ERR_[A-Z_]+\)/) },
+      { location: expect.stringMatching(/^\/about /), reason: expect.stringMatching(/contrast/) },
+    ]);
+  });
+
+  it("reports a redirect loop as that page's failure, and checks the others", async () => {
+    const site = await serve({
+      "/": page("Home", ["/loop", "/about"]),
+      "/loop": redirect("/loop/again"),
+      "/loop/again": redirect("/loop"),
+      "/about": page("About", ["/"], { faint: true }),
+    });
+
+    const { run, report } = await reviewJson(site.url);
+
+    expect(run.stderr).toBe("");
+    expect(run.exitCode).toBe(1);
+    expect(report!.routes).toEqual(["/", "/about", "/loop"]);
+    expect(failures(report!)).toEqual([
+      { location: expect.stringMatching(/^\/about /), reason: expect.stringMatching(/contrast/) },
+      { location: "/loop", reason: expect.stringMatching(/redirects in a loop/) },
+    ]);
+  });
+
+  it("reports a chain of meta refreshes as that page's failure, and checks the others", async () => {
+    const refresh = (to: string) =>
+      `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Moved</title><meta http-equiv="refresh" content="0;url=${to}"></head><body></body></html>`;
+    const site = await serve({
+      "/": page("Home", ["/ping", "/about"]),
+      "/ping": refresh("/pong"),
+      "/pong": refresh("/ping"),
+      "/about": page("About", ["/"], { faint: true }),
+    });
+
+    const { run, report } = await reviewJson(site.url);
+
+    expect(run.stderr).toBe("");
+    expect(run.exitCode).toBe(1);
+    expect(report!.routes).toEqual(["/", "/about", "/ping"]);
+    expect(failures(report!)).toEqual([
+      { location: expect.stringMatching(/^\/about /), reason: expect.stringMatching(/contrast/) },
+      { location: "/ping", reason: expect.stringMatching(/keeps sending the browser on/) },
+    ]);
+  });
+
+  it("reports a page that reloads itself as that page's failure, and checks the others", async () => {
+    const reloading = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Again</title></head><body><script>location.reload()</script></body></html>`;
+    const site = await serve({ "/": page("Home", ["/again", "/about"]), "/again": reloading, "/about": page("About", ["/"], { faint: true }) });
+
+    const { run, report } = await reviewJson(site.url);
+
+    expect(run.stderr).toBe("");
+    expect(run.exitCode).toBe(1);
+    expect(axeLocations(report!)).toContainEqual(expect.stringMatching(/^\/about /));
+    expect(failures(report!)).toContainEqual({ location: "/again", reason: expect.stringMatching(/reloads itself/) });
+  });
+
+  it("checks a page whose path starts with // on the Site, not on a host named after its path", async () => {
+    let siteUrl = "";
+    const site = await serve({
+      "/": (request, response) => {
+        const double = request.url?.startsWith("//") ?? false;
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(double ? page("Double", [], { faint: true }) : page("Home", [`${siteUrl}/double`]));
+      },
+    });
+    siteUrl = site.url;
+
+    const { run, report } = await reviewJson(site.url);
+
+    expect(run.stderr).toBe("");
+    expect(run.exitCode).toBe(1);
+    expect(report!.routes).toEqual(["/", "//double"]);
+    expect(axeLocations(report!)).toEqual([expect.stringMatching(/^\/\/double /)]);
+  });
+});
+
 describe("factory review when it cannot review the Site", () => {
   it("refuses a start address that is not an HTML page, with its own exit code", async () => {
     const site = await serve({ "/": { headers: { "content-type": "application/json" }, body: "{}" } });
@@ -216,28 +319,5 @@ describe("factory review when it cannot review the Site", () => {
     expect(run.stdout).toBe("");
     expect(run.stderr).toMatch(/application\/json/);
     expect(run.stderr).toMatch(/HTML/);
-  });
-
-  it("explains an unexpected stop in one plain sentence with its own exit code, not a stack trace", async () => {
-    let aboutRequests = 0;
-    const site = await serve({
-      "/": page("Home", ["/about"]),
-      "/about": (_request, response) => {
-        aboutRequests += 1;
-        if (aboutRequests === 1) {
-          response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-          response.end(page("About", ["/"]));
-        } else {
-          response.destroy();
-        }
-      },
-    });
-
-    const { run } = await reviewJson(site.url);
-
-    expect(run.exitCode).toBe(3);
-    expect(run.stderr).toMatch(/^The review stopped before it could check your whole Site/);
-    expect(run.stderr.trim().split("\n")).toHaveLength(1);
-    expect(run.stderr).not.toMatch(/\n\s+at /);
   });
 });
