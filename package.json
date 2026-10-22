@@ -1,0 +1,27 @@
+{
+  "name": "@fabkrum/web-factory",
+  "version": "0.0.0",
+  "description": "The Factory inside a Site repository: the Pipeline, the Ticket loop and its Review checks.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "factory": "bin/factory.js"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.12"
+  }
+}
