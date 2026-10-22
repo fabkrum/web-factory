@@ -1,14 +1,33 @@
 {
-  "test": "sh -c '[ ! -f package.json ] || npm test'",
+  "test": "sh -c '[ ! -f package.json ] || (npm run typecheck --if-present && npm test)'",
   "setup": "sh -c '[ ! -f package-lock.json ] || npm ci'",
   "session_rules": [
     "The sandbox blocks npm's default cache in ~/.npm. Run every npm install, ci or exec with --cache .npm-cache (the folder is gitignored), for example: npm install --cache .npm-cache vitest",
     "The sandbox blocks ~/Library/Caches. Install and run Playwright browsers with PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright, or use the installed Google Chrome (channel 'chrome').",
+    "Local port binding and Chrome are blocked inside the sandbox: tests that start a local server or a browser (the review tests, the fixture Sites, Playwright, Lighthouse) hang there without output. Run them with the sandbox off from the start.",
     "Never create GitHub repositories, Firebase projects, CI secrets or npm publications, and never call a real account (GitHub API writes, Stitch, Figma, CrUX, Firebase) from a session. Real contract tests are written so that CI skips them with a clear message while their secret or CLI is missing."
   ],
   "risk": [
-    {"paths": [".github/**"], "why": "CI and its secrets"},
-    {"paths": ["AGENTS.md", "CLAUDE.md", "**/skills/**"], "why": "instructions every Agent CLI follows"},
-    {"paths": ["docs/adr/**", "GLOSSARY.md"], "why": "a decision record or the domain language"}
+    {
+      "paths": [
+        ".github/**"
+      ],
+      "why": "CI and its secrets"
+    },
+    {
+      "paths": [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "**/skills/**"
+      ],
+      "why": "instructions every Agent CLI follows"
+    },
+    {
+      "paths": [
+        "docs/adr/**",
+        "GLOSSARY.md"
+      ],
+      "why": "a decision record or the domain language"
+    }
   ]
 }
