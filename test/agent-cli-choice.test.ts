@@ -23,7 +23,7 @@ describe("the Site's choice of Agent CLI", () => {
 
   it("refuses an Agent CLI the Factory has no adapter for, in plain words", async () => {
     await expect(readAgentCliChoice(siteWith({ testCommand: "true", agentCli: "copilot" }))).rejects.toThrow(
-      new ConfigError('factory.json names the Agent CLI "copilot", but the Factory supports only claude-code and codex.'),
+      new ConfigError('factory.json names the Agent CLI "copilot", but the Factory supports only claude-code, codex, antigravity and gemini.'),
     );
   });
 });

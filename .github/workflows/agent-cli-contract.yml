@@ -3,7 +3,8 @@
 # They spend real model usage, so they run nightly and on demand, not on every pull request.
 # The maintainer sets up once, outside any session:
 #   - an Anthropic API key for Claude Code, in the secret CONTRACT_ANTHROPIC_API_KEY;
-#   - an OpenAI API key for Codex, in the secret CONTRACT_OPENAI_API_KEY.
+#   - an OpenAI API key for Codex, in the secret CONTRACT_OPENAI_API_KEY;
+#   - a Gemini API key for Antigravity CLI and Gemini CLI, in the secret CONTRACT_GEMINI_API_KEY.
 # Until a secret exists its test is skipped and says why in its title.
 name: Agent CLI contract
 
@@ -47,3 +48,36 @@ jobs:
         run: npx vitest run test/codex-contract.test.ts
         env:
           CODEX_API_KEY: ${{ secrets.CONTRACT_OPENAI_API_KEY }}
+
+  antigravity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Antigravity CLI is a binary from Google's installer, not an npm package.
+      - run: curl -fsSL -o "$RUNNER_TEMP/install-agy.sh" https://antigravity.google/cli/install.sh
+      - run: bash "$RUNNER_TEMP/install-agy.sh"
+      - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Contract tests against the real agy
+        run: npx vitest run test/google-cli-contract.test.ts -t "real agy"
+        env:
+          GEMINI_API_KEY: ${{ secrets.CONTRACT_GEMINI_API_KEY }}
+
+  gemini:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm install -g @google/gemini-cli
+      - name: Contract tests against the real gemini
+        run: npx vitest run test/google-cli-contract.test.ts -t "real gemini"
+        env:
+          GEMINI_API_KEY: ${{ secrets.CONTRACT_GEMINI_API_KEY }}

@@ -4,10 +4,13 @@ import { factory } from "./cli.ts";
 import { Codex } from "./codex.ts";
 import { ConfigError, readAgentCliChoice, type AgentCliName } from "./config.ts";
 import { GitHubTracker } from "./github-tracker.ts";
+import { GoogleCli } from "./google-cli.ts";
 
 const ADAPTERS: Record<AgentCliName, () => AgentCli> = {
   "claude-code": () => new ClaudeCode(),
   codex: () => new Codex(),
+  antigravity: () => new GoogleCli({ cli: "antigravity" }),
+  gemini: () => new GoogleCli({ cli: "gemini" }),
 };
 
 let agentCli: AgentCli;

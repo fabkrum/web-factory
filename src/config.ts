@@ -43,7 +43,7 @@ export async function readSiteConfig(siteDir: string): Promise<SiteConfig> {
 }
 
 /** The Agent CLIs the Factory has an adapter for, as a Site names them in `factory.json`. */
-export const AGENT_CLIS = ["claude-code", "codex"] as const;
+export const AGENT_CLIS = ["claude-code", "codex", "antigravity", "gemini"] as const;
 export type AgentCliName = (typeof AGENT_CLIS)[number];
 
 /**
@@ -60,5 +60,5 @@ export async function readAgentCliChoice(siteDir: string): Promise<AgentCliName>
   const choice = (parsed as { agentCli?: unknown } | null)?.agentCli;
   if (choice === undefined) return "claude-code";
   if (typeof choice === "string" && (AGENT_CLIS as readonly string[]).includes(choice)) return choice as AgentCliName;
-  throw new ConfigError(`${CONFIG_FILE} names the Agent CLI ${JSON.stringify(choice)}, but the Factory supports only ${AGENT_CLIS.join(" and ")}.`);
+  throw new ConfigError(`${CONFIG_FILE} names the Agent CLI ${JSON.stringify(choice)}, but the Factory supports only ${AGENT_CLIS.slice(0, -1).join(", ")} and ${AGENT_CLIS.at(-1)}.`);
 }
