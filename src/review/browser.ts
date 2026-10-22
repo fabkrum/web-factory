@@ -71,20 +71,23 @@ const LANDING_TIMEOUT = 5_000;
 /** How many times a page may send the browser on before the review gives up on it. */
 const MAX_HOPS = 5;
 
+/** How long the review gives a settled page to be read (axe on a long page takes a while) before it reports that page as failed. */
+const READ_TIMEOUT = 30_000;
+
 /**
  * Reads the page the browser settled on. A page can send the browser on by
  * itself after it loaded, as an alias page with `<meta http-equiv="refresh"
  * content="0;url=…">` does; the review waits for the page it lands on and
  * reads that, and reads again if it moved on while being read. A page still
  * moving after a few hops (a chain of refreshes, a script that reloads it) is
- * a PageError.
+ * a PageError, and so is one that is still on its way to the next page, or
+ * still being read, when time runs out: a refresh to a page that never
+ * answers would otherwise hold the whole review forever.
  */
 export async function settled<T>(page: Page, read: () => Promise<T>): Promise<T> {
   for (let hop = 0; hop <= MAX_HOPS; hop++) {
     try {
-      await page.waitForLoadState("load");
-      const moving = movesOn(page);
-      if (!(await refreshesAtOnce(page)) || !(await moving)) return await read();
+      if (await within(holdsStill(page), LOAD_TIMEOUT)) return await within(read(), READ_TIMEOUT);
     } catch (error) {
       if (!movedOn(error)) throw error;
     }
@@ -94,9 +97,37 @@ export async function settled<T>(page: Page, read: () => Promise<T>): Promise<T>
   );
 }
 
+/** Whether the loaded page stays where it is; false when it sends the browser on. */
+async function holdsStill(page: Page): Promise<boolean> {
+  await page.waitForLoadState("load");
+  const moving = movesOn(page);
+  return !(await refreshesAtOnce(page)) || !(await moving);
+}
+
+/** The work's result, or a PageError for this page when it takes longer than `ms`. */
+async function within<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new PageError(
+            `This page did not hold still within ${ms / 1000} seconds: it sends the browser on to another page that never finishes loading, or is still busy, so the review could not check it. Check that it loads once in a browser and that any page it sends the browser on to answers.`,
+          ),
+        ),
+      ms,
+    );
+  });
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** The error Playwright throws when the page navigated away while the review was reading it. */
 function movedOn(error: unknown): boolean {
-  return error instanceof Error && /context was destroyed|navigat/i.test(error.message);
+  return !(error instanceof PageError) && error instanceof Error && /context was destroyed|navigat/i.test(error.message);
 }
 
 /** Whether the page carries a meta refresh that fires at once. */

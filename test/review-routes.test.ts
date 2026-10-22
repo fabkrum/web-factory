@@ -277,6 +277,26 @@ describe("factory review when one page fails", () => {
     ]);
   });
 
+  it("reports a meta refresh to a page that never answers as that page's failure, and checks the others", async () => {
+    const alias = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Moved</title><meta http-equiv="refresh" content="0;url=/hang"></head><body></body></html>`;
+    const site = await serve({
+      "/": page("Home", ["/alias", "/about"]),
+      "/alias": alias,
+      "/hang": () => {},
+      "/about": page("About", ["/"], { faint: true }),
+    });
+
+    const { run, report } = await reviewJson(site.url);
+
+    expect(run.stderr).toBe("");
+    expect(run.exitCode).toBe(1);
+    expect(report!.routes).toEqual(["/", "/about", "/alias"]);
+    expect(failures(report!)).toEqual([
+      { location: expect.stringMatching(/^\/about /), reason: expect.stringMatching(/contrast/) },
+      { location: "/alias", reason: expect.stringMatching(/did not hold still within 15 seconds/) },
+    ]);
+  });
+
   it("reports a page that reloads itself as that page's failure, and checks the others", async () => {
     const reloading = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Again</title></head><body><script>location.reload()</script></body></html>`;
     const site = await serve({ "/": page("Home", ["/again", "/about"]), "/again": reloading, "/about": page("About", ["/"], { faint: true }) });
