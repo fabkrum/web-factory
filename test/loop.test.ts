@@ -123,6 +123,7 @@ describe("factory loop with one Ticket", () => {
     });
     const closeFails: Tracker = {
       ticketsOf: (n) => tracker.ticketsOf(n),
+      historyOf: (n) => tracker.historyOf(n),
       comment: (n, body) => tracker.comment(n, body),
       close: async () => {
         throw new Error("GitHub is down");
@@ -148,6 +149,7 @@ describe("factory loop with one Ticket", () => {
     const { tracker, spec, ticket } = oneTicketSpec();
     const closesThenFails: Tracker = {
       ticketsOf: (n) => tracker.ticketsOf(n),
+      historyOf: (n) => tracker.historyOf(n),
       comment: (n, body) => tracker.comment(n, body),
       close: async (n) => {
         await tracker.close(n);
@@ -161,7 +163,74 @@ describe("factory loop with one Ticket", () => {
     await expect(runFactory(["loop", String(spec)], { cwd: site, agentCli: first, tracker: closesThenFails })).rejects.toThrow(/timed out/);
     expect(tracker.issue(ticket).state).toBe("closed");
 
-    tracker.issue(ticket).state = "open";
+    tracker.reopen(ticket);
+    const rework = new FakeAgentCli(() => {});
+    const rerun = await runFactory(["loop", String(spec)], { cwd: site, agentCli: rework, tracker });
+
+    expect(rework.sessions).toHaveLength(1);
+    expect(rerun.exitCode).not.toBe(0);
+    expect(tracker.issue(ticket).state).toBe("open");
+    expect(tracker.issue(ticket).comments.filter((comment) => /^Pass/.test(comment))).toHaveLength(1);
+  });
+
+  it("only closes on the next run a Ticket whose Pass comment went through but reported an error, and builds it again once reopened", async () => {
+    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const { tracker, spec, ticket } = oneTicketSpec();
+    let ticketCommit = "";
+    const first = new FakeAgentCli(({ cwd }) => {
+      ticketCommit = commitFile(cwd, "index.html", "<h1>hello</h1>\n");
+    });
+    const commentsThenFails: Tracker = {
+      ticketsOf: (n) => tracker.ticketsOf(n),
+      historyOf: (n) => tracker.historyOf(n),
+      comment: async (n, body) => {
+        await tracker.comment(n, body);
+        throw new Error("GitHub timed out");
+      },
+      close: (n) => tracker.close(n),
+    };
+
+    await expect(runFactory(["loop", String(spec)], { cwd: site, agentCli: first, tracker: commentsThenFails })).rejects.toThrow(/timed out/);
+    expect(tracker.issue(ticket).state).toBe("open");
+
+    const none = new FakeAgentCli();
+    const rerun = await runFactory(["loop", String(spec)], { cwd: site, agentCli: none, tracker });
+
+    expect(rerun.exitCode, rerun.stderr).toBe(0);
+    expect(none.sessions).toHaveLength(0);
+    expect(tracker.issue(ticket).state).toBe("closed");
+    expect(tracker.issue(ticket).comments).toHaveLength(1);
+    expect(git(site, "rev-parse", `spec/${spec}`)).toBe(ticketCommit);
+
+    tracker.reopen(ticket);
+    const rework = new FakeAgentCli(() => {});
+    const afterReopen = await runFactory(["loop", String(spec)], { cwd: site, agentCli: rework, tracker });
+
+    expect(rework.sessions).toHaveLength(1);
+    expect(afterReopen.exitCode).not.toBe(0);
+    expect(tracker.issue(ticket).state).toBe("open");
+    expect(tracker.issue(ticket).comments.filter((comment) => /^Pass/.test(comment))).toHaveLength(1);
+  });
+
+  it("does not finish a broken-off Pass whose Ticket was closed and reopened since, but builds it again", async () => {
+    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const { tracker, spec, ticket } = oneTicketSpec();
+    const first = new FakeAgentCli(({ cwd }) => {
+      commitFile(cwd, "index.html", "<h1>hello</h1>\n");
+    });
+    const commentsThenFails: Tracker = {
+      ticketsOf: (n) => tracker.ticketsOf(n),
+      historyOf: (n) => tracker.historyOf(n),
+      comment: async (n, body) => {
+        await tracker.comment(n, body);
+        throw new Error("GitHub timed out");
+      },
+      close: (n) => tracker.close(n),
+    };
+
+    await expect(runFactory(["loop", String(spec)], { cwd: site, agentCli: first, tracker: commentsThenFails })).rejects.toThrow(/timed out/);
+    await tracker.close(ticket);
+    tracker.reopen(ticket);
     const rework = new FakeAgentCli(() => {});
     const rerun = await runFactory(["loop", String(spec)], { cwd: site, agentCli: rework, tracker });
 
@@ -227,6 +296,79 @@ describe("factory loop with one Ticket", () => {
     const run = await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
 
     expectNoPass(run.exitCode, tracker, ticket, /the session crashed/);
+  });
+});
+
+describe("factory loop with two Tickets", () => {
+  function twoTicketSpec() {
+    const tracker = new FakeTracker();
+    const spec = tracker.addSpec("Two pages");
+    const first = tracker.addTicket(spec, "The first page");
+    const second = tracker.addTicket(spec, "The second page");
+    return { tracker, spec, first, second };
+  }
+
+  it("brings a Ticket that did not pass up to what a sibling Passed since, so it can Pass on a later run", async () => {
+    const site = createSiteRepo({ testCommand: "test ! -f broken.txt" });
+    const { tracker, spec, first, second } = twoTicketSpec();
+    let sawSibling = false;
+    const agentCli = new FakeAgentCli(
+      ({ cwd }) => {
+        commitFile(cwd, "broken.txt", "red\n");
+        commitFile(cwd, "one.html", "<h1>one</h1>\n");
+      },
+      ({ cwd }) => {
+        commitFile(cwd, "two.html", "<h1>two</h1>\n");
+      },
+      ({ cwd, prompt }) => {
+        sawSibling = existsSync(`${cwd}/two.html`);
+        expect(prompt).toMatch(/build on `spec\/\d+`/);
+        git(cwd, "rm", "-q", "broken.txt");
+        git(cwd, "commit", "-q", "-m", "Fix the first page");
+      },
+    );
+
+    const run = await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
+    expect(run.exitCode).not.toBe(0);
+    expect(tracker.issue(second).state).toBe("closed");
+
+    const rerun = await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
+
+    expect(rerun.exitCode, rerun.stderr).toBe(0);
+    expect(sawSibling).toBe(true);
+    expect(tracker.issue(first).state).toBe("closed");
+    expect(git(site, "show", `spec/${spec}:one.html`)).toBe("<h1>one</h1>");
+    expect(git(site, "show", `spec/${spec}:two.html`)).toBe("<h1>two</h1>");
+  });
+
+  it("tells the session to resolve the conflicts when what a sibling Passed does not merge cleanly", async () => {
+    const site = createSiteRepo({ testCommand: "grep -q both index.html" });
+    const { tracker, spec, first, second } = twoTicketSpec();
+    let catchUpPrompt = "";
+    const agentCli = new FakeAgentCli(
+      ({ cwd }) => {
+        commitFile(cwd, "index.html", "<h1>one</h1>\n");
+      },
+      ({ cwd }) => {
+        commitFile(cwd, "index.html", "<h1>both</h1>\n");
+      },
+      ({ cwd, prompt }) => {
+        catchUpPrompt = prompt;
+        writeFile(cwd, "index.html", "<h1>one</h1>\n<h1>both</h1>\n");
+        git(cwd, "add", "index.html");
+        git(cwd, "commit", "-q", "--no-edit");
+      },
+    );
+
+    await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
+    expect(tracker.issue(second).state).toBe("closed");
+
+    const rerun = await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
+
+    expect(catchUpPrompt).toMatch(/conflicts/);
+    expect(rerun.exitCode, rerun.stderr).toBe(0);
+    expect(tracker.issue(first).state).toBe("closed");
+    expect(git(site, "show", `spec/${spec}:index.html`)).toBe("<h1>one</h1>\n<h1>both</h1>");
   });
 });
 

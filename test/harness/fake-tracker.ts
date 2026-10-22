@@ -1,8 +1,9 @@
-import type { Issue, Tracker } from "../../src/tracker.ts";
+import type { Issue, IssueEvent, Tracker } from "../../src/tracker.ts";
 
 export interface FakeIssue extends Issue {
   parent?: number;
   comments: string[];
+  history: IssueEvent[];
 }
 
 /** An in-memory stand-in for the Site's GitHub issues. */
@@ -24,6 +25,13 @@ export class FakeTracker implements Tracker {
     return issue;
   }
 
+  /** The Builder reopens an issue, as on GitHub. */
+  reopen(number: number): void {
+    const issue = this.issue(number);
+    issue.state = "open";
+    issue.history.push({ kind: "reopened" });
+  }
+
   async ticketsOf(spec: number): Promise<Issue[]> {
     this.issue(spec);
     return [...this.#issues.values()]
@@ -31,17 +39,25 @@ export class FakeTracker implements Tracker {
       .map(({ number, title, body, state, labels }) => ({ number, title, body, state, labels: [...labels] }));
   }
 
+  async historyOf(number: number): Promise<IssueEvent[]> {
+    return this.issue(number).history.map((event) => ({ ...event }));
+  }
+
   async comment(number: number, body: string): Promise<void> {
-    this.issue(number).comments.push(body);
+    const issue = this.issue(number);
+    issue.comments.push(body);
+    issue.history.push({ kind: "comment", body });
   }
 
   async close(number: number): Promise<void> {
-    this.issue(number).state = "closed";
+    const issue = this.issue(number);
+    issue.state = "closed";
+    issue.history.push({ kind: "closed" });
   }
 
   #add(fields: { title: string; body: string; labels: string[]; parent?: number }): number {
     const number = this.#next++;
-    this.#issues.set(number, { number, state: "open", comments: [], ...fields });
+    this.#issues.set(number, { number, state: "open", comments: [], history: [], ...fields });
     return number;
   }
 }

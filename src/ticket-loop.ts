@@ -6,7 +6,7 @@ import type { SiteConfig } from "./config.ts";
 import { runGate, type GateResult } from "./gate.ts";
 import { branchExists, git, gitSucceeds, worktreeOf } from "./git.ts";
 import { stageLabel } from "./stages.ts";
-import type { Issue, Tracker } from "./tracker.ts";
+import type { Issue, IssueEvent, Tracker } from "./tracker.ts";
 
 /** Local, uncommitted Factory state in the Site repository: worktrees for now. */
 const LOCAL_DIR = ".factory";
@@ -67,25 +67,34 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<boolean
   const integration = integrationBranch(spec);
   const branch = ticketBranch(ticket.number);
 
-  const announced = await refTarget(siteDir, announcedRef(ticket.number));
-  if (announced) {
+  // A Pass that broke off is finished from the tracker and git, never from a local record alone:
+  // anything that happened on the Ticket since, or a new commit on its branch, is rework.
+  const history = await tracker.historyOf(ticket.number);
+  const tip = await refTarget(siteDir, `refs/heads/${branch}`);
+  const announced = announcedPass(history);
+  if (announced && announced === tip && (await gitSucceeds(siteDir, "merge-base", "--is-ancestor", announced, integration))) {
     log(`Ticket #${ticket.number}: its Pass was announced last run but the Ticket did not close, closing it`);
-    await closeAsPass(ticket, options, announced);
+    await git(siteDir, "update-ref", "-d", passRef(ticket.number));
+    await closeAsPass(ticket, options);
     return true;
   }
   const tested = await refTarget(siteDir, passRef(ticket.number));
   if (tested) {
-    log(`Ticket #${ticket.number}: its Pass broke off last run, finishing it`);
-    return finishPass(ticket, options, tested);
+    if (tested === tip && !passCommits(history).includes(tested)) {
+      log(`Ticket #${ticket.number}: its Pass broke off last run, finishing it`);
+      return finishPass(ticket, options, tested);
+    }
+    await git(siteDir, "update-ref", "-d", passRef(ticket.number));
   }
 
   const worktree = await openWorktree(siteDir, ticket.number, integration);
+  const catchUp = await catchUpWith(worktree, integration);
   const base = await git(siteDir, "rev-parse", integration);
   log(`Ticket #${ticket.number}: building on ${branch} in ${relative(siteDir, worktree)}`);
 
   const session = await agentCli.runSession({
     cwd: worktree,
-    prompt: buildPrompt(ticket, spec, config),
+    prompt: buildPrompt(ticket, spec, config, catchUp),
     sandbox: true,
     timeoutMs: config.sessionTimeoutMs,
   });
@@ -100,15 +109,26 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<boolean
     return false;
   }
 
-  // Recorded before anything moves, so a run that dies partway through the Pass finishes it next time.
+  // Recorded before anything moves, so a run that dies before the Pass comment finishes it next time.
   await git(siteDir, "update-ref", passRef(ticket.number), gate.head);
   return finishPass(ticket, options, gate.head);
 }
 
-/** Where a green gate leaves the commit it tested until the Pass is announced. */
+/** Where a green gate leaves the commit it tested until the Pass comment is posted. */
 const passRef = (ticket: number): string => `refs/factory/pass/ticket-${ticket}`;
-/** Where an announced Pass waits for its Ticket to close. */
-const announcedRef = (ticket: number): string => `refs/factory/announced/ticket-${ticket}`;
+
+const PASS_COMMENT = /^Pass\.[\s\S]*\(([0-9a-f]{40})\)\.$/;
+
+/** The commits the Ticket's Pass comments name, oldest first. */
+function passCommits(history: IssueEvent[]): string[] {
+  return history.flatMap((event) => (event.kind === "comment" ? (PASS_COMMENT.exec(event.body)?.[1] ?? []) : []));
+}
+
+/** The commit of a Pass that was announced and is the last thing that happened on the Ticket. */
+function announcedPass(history: IssueEvent[]): string | undefined {
+  const last = history.at(-1);
+  return last?.kind === "comment" ? PASS_COMMENT.exec(last.body)?.[1] : undefined;
+}
 
 async function refTarget(siteDir: string, ref: string): Promise<string | undefined> {
   if (!(await gitSucceeds(siteDir, "rev-parse", "--verify", "--quiet", ref))) return undefined;
@@ -117,9 +137,9 @@ async function refTarget(siteDir: string, ref: string): Promise<string | undefin
 
 /**
  * The steps of a Pass after the gate: merge the tested commit, remove the worktree,
- * comment, close. A rerun repeats the merge and the worktree removal harmlessly;
- * the comment is posted once, because the record moves from passRef to announcedRef
- * as soon as it is.
+ * comment, close. A rerun repeats the merge and the worktree removal harmlessly.
+ * Once the Pass comment is posted it is the record: the pass ref goes, and a rerun
+ * that finds the comment last on the open Ticket only closes it.
  */
 async function finishPass(ticket: Issue, options: LoopOptions, head: string): Promise<boolean> {
   const { siteDir, spec, tracker, log } = options;
@@ -147,40 +167,18 @@ async function finishPass(ticket: Issue, options: LoopOptions, head: string): Pr
   if (worktree) await git(siteDir, "worktree", "remove", "--force", worktree);
   await tracker.comment(
     ticket.number,
-    `Pass. The Ticket loop built this Ticket on \`${branch}\`, its gate was green, and \`${integration}\` now contains it (${head.slice(0, 7)}).`,
+    `Pass. The Ticket loop built this Ticket on \`${branch}\`, its gate was green, and \`${integration}\` now contains it (${head}).`,
   );
-  await git(siteDir, "update-ref", announcedRef(ticket.number), head);
   await git(siteDir, "update-ref", "-d", passRef(ticket.number));
-  await closeAsPass(ticket, options, head);
+  await closeAsPass(ticket, options);
   return true;
 }
 
-/**
- * Closes the Ticket of an announced Pass. The record goes before the close, so a
- * Ticket that did close leaves nothing behind that could Pass it again once reopened.
- * It comes back only when the close failed and the Ticket is still seen open.
- */
-async function closeAsPass(ticket: Issue, options: LoopOptions, head: string): Promise<void> {
-  const { siteDir, spec, tracker, log } = options;
-  await git(siteDir, "update-ref", "-d", announcedRef(ticket.number));
-  try {
-    await tracker.close(ticket.number);
-  } catch (error) {
-    if (!(await seenClosed(tracker, spec, ticket.number))) {
-      await git(siteDir, "update-ref", announcedRef(ticket.number), head);
-    }
-    throw error;
-  }
+/** Closes the Ticket of an announced Pass. */
+async function closeAsPass(ticket: Issue, options: LoopOptions): Promise<void> {
+  const { spec, tracker, log } = options;
+  await tracker.close(ticket.number);
   log(`Ticket #${ticket.number}: Pass, now in ${integrationBranch(spec)}`);
-}
-
-/** Whether the tracker shows the Ticket closed; a tracker that cannot answer does not. */
-async function seenClosed(tracker: Tracker, spec: number, ticket: number): Promise<boolean> {
-  try {
-    return (await tracker.ticketsOf(spec)).some((issue) => issue.number === ticket && issue.state === "closed");
-  } catch {
-    return false;
-  }
 }
 
 async function judge(
@@ -221,6 +219,19 @@ async function openWorktree(siteDir: string, ticket: number, integration: string
   return path;
 }
 
+/**
+ * Brings the Ticket's branch up to the integration branch, so work from an earlier
+ * run builds on what has Passed since. Says what the session must finish when the merge did not.
+ */
+async function catchUpWith(worktree: string, integration: string): Promise<string | undefined> {
+  if (await gitSucceeds(worktree, "merge-base", "--is-ancestor", integration, "HEAD")) return undefined;
+  if (await gitSucceeds(worktree, "merge", "--quiet", "--no-edit", integration)) return undefined;
+  if (await gitSucceeds(worktree, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")) {
+    return `Merging \`${integration}\` into this branch left conflicts. Resolve them and commit the merge before anything else.`;
+  }
+  return `\`${integration}\` moved on and could not be merged into this branch. Merge it first.`;
+}
+
 /** Moves the integration branch from its tip to the commit the gate tested, which builds on that tip. */
 async function fastForward(siteDir: string, integration: string, tip: string, head: string): Promise<void> {
   if (await worktreeOf(siteDir, integration)) {
@@ -240,8 +251,9 @@ async function keepLocalStateOutOfGit(siteDir: string): Promise<void> {
   await appendFile(exclude, `${current === "" || current.endsWith("\n") ? "" : "\n"}/${LOCAL_DIR}/\n`);
 }
 
-function buildPrompt(ticket: Issue, spec: number, config: SiteConfig): string {
+function buildPrompt(ticket: Issue, spec: number, config: SiteConfig, catchUp: string | undefined): string {
   return [
+    ...(catchUp ? [catchUp, ""] : []),
     `You are building Ticket #${ticket.number} of Spec #${spec} in this Site's repository, unattended.`,
     "",
     `# ${ticket.title}`,
@@ -249,6 +261,7 @@ function buildPrompt(ticket: Issue, spec: number, config: SiteConfig): string {
     ticket.body,
     "",
     "Commit your work to the current branch and leave no uncommitted files.",
+    `The work must build on \`${integrationBranch(spec)}\`: the current branch contains it, so never rebase or reset it away.`,
     `The Site's test command \`${config.testCommand}\` must be green.`,
   ].join("\n");
 }
