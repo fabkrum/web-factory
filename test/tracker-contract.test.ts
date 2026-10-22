@@ -45,6 +45,9 @@ function realContractSkipReason(): string | undefined {
   if (!contractRepo) {
     return "WEB_FACTORY_CONTRACT_REPO is not set; set it to a disposable repository (owner/name) and GH_TOKEN to a token that may write its issues, pull requests and contents";
   }
+  if (!process.env.GH_TOKEN) {
+    return "GH_TOKEN is not set; in CI it comes from the CONTRACT_GH_TOKEN secret, a token that may write the disposable repository's issues, pull requests and contents";
+  }
   try {
     execFileSync("gh", ["--version"], { stdio: "ignore" });
   } catch {
