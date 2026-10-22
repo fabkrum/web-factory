@@ -1,4 +1,4 @@
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { ReviewError } from "./check.ts";
 
 /**
@@ -17,4 +17,14 @@ export async function launchBrowser(): Promise<Browser> {
       );
     }
   }
+}
+
+/**
+ * A fresh page to review the Site in. The Site's Content-Security-Policy is
+ * bypassed, so the review can inject its tools into a Site that forbids inline
+ * scripts. Close it with `page.context().close()`.
+ */
+export async function openReviewPage(browser: Browser): Promise<Page> {
+  const context = await browser.newContext({ bypassCSP: true });
+  return context.newPage();
 }

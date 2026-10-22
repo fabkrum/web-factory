@@ -14,6 +14,7 @@ export interface CheckResult {
 }
 
 export interface ReviewReport {
+  /** The address the Site answered at after any redirect. */
   url: string;
   routes: string[];
   /** True when every Review check passed: the Site Passes. */
@@ -26,8 +27,8 @@ export interface ReviewReport {
 export async function runReview(url: URL, checks: ReviewCheck[] = REVIEW_CHECKS): Promise<ReviewReport> {
   const browser = await launchBrowser();
   try {
-    const routes = await findRoutes(browser, url);
-    const site = { url, routes, browser };
+    const { url: siteUrl, routes } = await findRoutes(browser, url);
+    const site = { url: siteUrl, routes, browser };
     const results = new Map<ReviewCheck, CheckResult>();
     for (const check of checks) {
       const failures = await check.run(site);
@@ -37,7 +38,7 @@ export async function runReview(url: URL, checks: ReviewCheck[] = REVIEW_CHECKS)
       area,
       checks: checks.filter((check) => check.area === area).map((check) => results.get(check)!),
     }));
-    return { url: url.href, routes, passed: [...results.values()].every((result) => result.passed), areas };
+    return { url: siteUrl.href, routes, passed: [...results.values()].every((result) => result.passed), areas };
   } finally {
     await browser.close();
   }

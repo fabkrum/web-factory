@@ -104,7 +104,7 @@ describe("factory review <url>", () => {
     const gone = new URL("/does-not-exist.html", site.url).href;
     const run = await runFactory(["review", gone], { cwd: process.cwd() });
 
-    expect(run.exitCode).toBe(1);
+    expect(run.exitCode).toBe(3);
     expect(run.stderr).toMatch(/404/);
     expect(run.stderr).toMatch(/does-not-exist\.html/);
   });

@@ -1,4 +1,5 @@
 import axe, { type AxeResults, type NodeResult, type Result } from "axe-core";
+import { openReviewPage } from "./browser.ts";
 import type { Failure, ReviewCheck } from "./check.ts";
 
 /**
@@ -35,7 +36,7 @@ export const axeCheck: ReviewCheck = {
   area: "Accessibility",
   async run(site) {
     const failures: Failure[] = [];
-    const page = await site.browser.newPage();
+    const page = await openReviewPage(site.browser);
     try {
       for (const route of site.routes) {
         await page.goto(new URL(route, site.url).href, { waitUntil: "load" });
@@ -51,7 +52,7 @@ export const axeCheck: ReviewCheck = {
         failures.push(...failuresOn(route, results));
       }
     } finally {
-      await page.close();
+      await page.context().close();
     }
     return failures;
   },

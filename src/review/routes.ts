@@ -1,74 +1,98 @@
 import type { Browser, Page } from "playwright";
+import { openReviewPage } from "./browser.ts";
 import { ReviewError } from "./check.ts";
 
 /** Stops a Site with endless generated links from making the review endless too. */
 const MAX_ROUTES = 50;
 
-/** Links to files with these endings are pages; links to any other file (a PDF, an image) are not. */
-const PAGE_ENDINGS = new Set(["", ".html", ".htm", ".php"]);
+/** Where the Site answered after any redirect, and every route on it. */
+export interface SiteRoutes {
+  url: URL;
+  routes: string[];
+}
+
+/** A page that opened, at the address it ended up on, or why it did not open as a page. */
+type Visit = { url: URL; links: string[] } | { problem: string };
 
 /**
  * Finds every route of the Site by following its own links from the address the
- * Builder gave, the way a Visitor clicking through would. Only pages on the same
- * origin count; a link that does not answer with a page is left to other checks.
+ * Builder gave, the way a Visitor clicking through would. The Site is the origin
+ * that address ends up on after redirects; a page that ends up anywhere else is
+ * not part of it, and a link that does not answer with a page is left to other checks.
  */
-export async function findRoutes(browser: Browser, start: URL): Promise<string[]> {
-  const page = await browser.newPage();
+export async function findRoutes(browser: Browser, start: URL): Promise<SiteRoutes> {
+  const page = await openReviewPage(browser);
   try {
+    const home = await visit(page, start);
+    if ("problem" in home) throw new ReviewError(home.problem);
+    const origin = home.url.origin;
     const routes: string[] = [];
-    const queue = [routeOf(start)];
-    const seen = new Set(queue);
-    let isStart = true;
-    while (queue.length > 0 && routes.length < MAX_ROUTES) {
-      const route = queue.shift()!;
-      const links = await visit(page, new URL(route, start), isStart);
-      isStart = false;
-      if (links === undefined) continue;
-      routes.push(route);
-      for (const link of links) {
-        const url = new URL(link);
-        if (url.origin !== start.origin || !isPage(url)) continue;
-        const next = routeOf(url);
-        if (seen.has(next)) continue;
-        seen.add(next);
-        queue.push(next);
+    const found = new Set<string>();
+    const requested = new Set([documentKey(start), documentKey(home.url)]);
+    const queue: URL[] = [];
+    const take = (visited: { url: URL; links: string[] }) => {
+      const key = documentKey(visited.url);
+      if (visited.url.origin !== origin || found.has(key)) return;
+      found.add(key);
+      routes.push(visited.url.pathname);
+      for (const link of visited.links) {
+        const url = parse(link);
+        if (!url || url.origin !== origin) continue;
+        const next = documentKey(url);
+        if (requested.has(next)) continue;
+        requested.add(next);
+        queue.push(url);
       }
+    };
+    take(home);
+    while (queue.length > 0 && routes.length < MAX_ROUTES) {
+      const visited = await visit(page, queue.shift()!);
+      if (!("problem" in visited)) take(visited);
     }
-    return routes;
+    return { url: home.url, routes };
   } finally {
-    await page.close();
+    await page.context().close();
   }
 }
 
-/** Opens one route and returns the links on it, or undefined when it is not a page. */
-async function visit(page: Page, url: URL, isStart: boolean): Promise<string[] | undefined> {
+/** Opens one address and returns where it ended up and the links there, or why it is not a page. */
+async function visit(page: Page, url: URL): Promise<Visit> {
   let response;
   try {
     response = await page.goto(url.href, { waitUntil: "load" });
   } catch {
-    if (isStart) {
-      throw new ReviewError(`The review could not reach ${url.href}. Check that your Site is being served and that the address is right.`);
-    }
-    return undefined;
+    return { problem: `The review could not reach ${url.href}. Check that your Site is being served and that the address is right.` };
   }
   const status = response?.status() ?? 0;
   if (status >= 400) {
-    if (isStart) {
-      throw new ReviewError(`The review could not open ${url.href}: the server answered ${status} instead of a page. Check the address.`);
-    }
+    return { problem: `The review could not open ${url.href}: the server answered ${status} instead of a page. Check the address.` };
+  }
+  const type = response?.headers()["content-type"] ?? "text/html";
+  if (!type.includes("html")) {
+    return {
+      problem: `The review could not open ${url.href} as a page: the server answered with ${type.split(";")[0]} instead of HTML. Give the address of your Site's home page.`,
+    };
+  }
+  const links = await page.$$eval("a[href]", (anchors) => anchors.map((anchor) => (anchor as HTMLAnchorElement).href));
+  return { url: new URL(page.url()), links };
+}
+
+/** A web link, or undefined for one the browser could not resolve or that is not http(s); broken links are another check's job. */
+function parse(link: string): URL | undefined {
+  try {
+    const url = new URL(link);
+    return url.protocol === "http:" || url.protocol === "https:" ? url : undefined;
+  } catch {
     return undefined;
   }
-  if (!(response?.headers()["content-type"] ?? "text/html").includes("html")) return undefined;
-  return page.$$eval("a[href]", (anchors) => anchors.map((anchor) => (anchor as HTMLAnchorElement).href));
 }
 
-function routeOf(url: URL): string {
-  return url.pathname + url.search;
-}
-
-function isPage(url: URL): boolean {
-  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-  const last = url.pathname.split("/").pop() ?? "";
-  const dot = last.lastIndexOf(".");
-  return PAGE_ENDINGS.has(dot === -1 ? "" : last.slice(dot).toLowerCase());
+/**
+ * One key per document: a static Site serves the same page whatever the query
+ * string, at /x/ and /x/index.html, and with or without the trailing slash.
+ */
+function documentKey(url: URL): string {
+  let path = url.pathname.replace(/\/index\.html?$/i, "/");
+  if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
+  return url.origin + path;
 }
