@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { AgentCli, Session, SessionResult } from "./agent-cli.ts";
 import { DECISION_RULES, takeDecisionRequest } from "./decision-request.ts";
 import { git } from "./git.ts";
+import { firstLines, runSessionProcess } from "./session-process.ts";
 
 /**
  * Commands a session may never run, sandbox or not: pushing is the Ticket loop's job,
@@ -17,8 +17,6 @@ const ALLOWED_DOMAINS = ["registry.npmjs.org"];
 
 /** How long to wait when Claude Code says its limit is reached without saying until when. */
 const UNNAMED_RESET_WAIT_MS = 15 * 60 * 1000;
-/** How long a session gets to stop after its time limit before it is killed. */
-const KILL_GRACE_MS = 5000;
 
 const LIMIT = /usage limit|hit your limit|limit reached|rate.?limit|\b429\b|overloaded|\b529\b/i;
 
@@ -73,7 +71,15 @@ export class ClaudeCode implements AgentCli {
       await systemPrompt(cwd),
     ];
 
-    const run = await this.#spawn(args, cwd, session);
+    const run = await runSessionProcess({
+      command: [...this.#command, ...args],
+      cwd,
+      env: this.#env,
+      input: session.prompt,
+      timeoutMs: session.timeoutMs,
+      cli: "Claude Code",
+      commandName: "claude",
+    });
     // A question the session left wins over however it ended: it stopped to ask.
     const question = await takeDecisionRequest(cwd);
     if (question !== undefined) return { kind: "decision", question };
@@ -107,57 +113,6 @@ export class ClaudeCode implements AgentCli {
       permissions: { deny: DENIED },
     };
   }
-
-  #spawn(args: string[], cwd: string, session: Session): Promise<{ code: number; stdout: string; stderr: string } | { failure: string }> {
-    const [command, ...leading] = this.#command;
-    return new Promise((done) => {
-      // Its own process group, so a session that runs out of time is stopped with everything it started.
-      const child = spawn(command!, [...leading, ...args], {
-        cwd,
-        env: { ...process.env, ...this.#env, GIT_TERMINAL_PROMPT: "0" },
-        stdio: ["pipe", "pipe", "pipe"],
-        detached: true,
-      });
-      let stdout = "";
-      let stderr = "";
-      let timedOut = false;
-      const stop = (signal: NodeJS.Signals) => {
-        try {
-          process.kill(-child.pid!, signal);
-        } catch {
-          // Already gone.
-        }
-      };
-      const timer = setTimeout(() => {
-        timedOut = true;
-        stop("SIGTERM");
-        setTimeout(() => stop("SIGKILL"), KILL_GRACE_MS).unref();
-      }, session.timeoutMs);
-      child.stdout.on("data", (chunk: Buffer) => (stdout += chunk));
-      child.stderr.on("data", (chunk: Buffer) => (stderr += chunk));
-      child.on("error", (error: NodeJS.ErrnoException) => {
-        clearTimeout(timer);
-        done({
-          failure:
-            error.code === "ENOENT"
-              ? "Claude Code (the claude command) is not installed, so the Ticket loop cannot run a session with it."
-              : `Claude Code could not start: ${error.message}`,
-        });
-      });
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        if (timedOut) {
-          const minutes = Math.round(session.timeoutMs / 60_000);
-          const limit = minutes >= 1 ? `${minutes} minute${minutes === 1 ? "" : "s"}` : `${Math.round(session.timeoutMs / 1000)} seconds`;
-          done({ failure: `The session ran past its time limit of ${limit} and was stopped.` });
-        } else {
-          done({ code: code ?? 1, stdout, stderr });
-        }
-      });
-      child.stdin.on("error", () => {});
-      child.stdin.end(session.prompt);
-    });
-  }
 }
 
 async function systemPrompt(cwd: string): Promise<string> {
@@ -183,10 +138,6 @@ function lastJson(stdout: string): ClaudeResult | undefined {
   } catch {
     return undefined;
   }
-}
-
-function firstLines(text: string): string {
-  return text.split("\n").slice(0, 5).join("\n").slice(0, 500);
 }
 
 const RESET_EPOCH = /\|(\d{10})\b|resets?(?:At)?\D{0,12}?(\d{10})\b/;

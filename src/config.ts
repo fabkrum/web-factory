@@ -41,3 +41,24 @@ export async function readSiteConfig(siteDir: string): Promise<SiteConfig> {
   }
   return { testCommand, baseBranch, sessionTimeoutMs, maxAttempts };
 }
+
+/** The Agent CLIs the Factory has an adapter for, as a Site names them in `factory.json`. */
+export const AGENT_CLIS = ["claude-code", "codex"] as const;
+export type AgentCliName = (typeof AGENT_CLIS)[number];
+
+/**
+ * Which Agent CLI the Site runs its sessions with, from `agentCli` in `factory.json`;
+ * Claude Code when the Site names none (or has no `factory.json` yet).
+ */
+export async function readAgentCliChoice(siteDir: string): Promise<AgentCliName> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(join(siteDir, CONFIG_FILE), "utf8"));
+  } catch {
+    return "claude-code";
+  }
+  const choice = (parsed as { agentCli?: unknown } | null)?.agentCli;
+  if (choice === undefined) return "claude-code";
+  if (typeof choice === "string" && (AGENT_CLIS as readonly string[]).includes(choice)) return choice as AgentCliName;
+  throw new ConfigError(`${CONFIG_FILE} names the Agent CLI ${JSON.stringify(choice)}, but the Factory supports only ${AGENT_CLIS.join(" and ")}.`);
+}

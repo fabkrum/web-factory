@@ -2,8 +2,9 @@
 #
 # They spend real model usage, so they run nightly and on demand, not on every pull request.
 # The maintainer sets up once, outside any session:
-#   - an Anthropic API key for Claude Code, in the secret CONTRACT_ANTHROPIC_API_KEY.
-# Until it exists the test is skipped and says why in its title.
+#   - an Anthropic API key for Claude Code, in the secret CONTRACT_ANTHROPIC_API_KEY;
+#   - an OpenAI API key for Codex, in the secret CONTRACT_OPENAI_API_KEY.
+# Until a secret exists its test is skipped and says why in its title.
 name: Agent CLI contract
 
 on:
@@ -31,3 +32,18 @@ jobs:
         run: npx vitest run test/agent-cli-contract.test.ts
         env:
           ANTHROPIC_API_KEY: ${{ secrets.CONTRACT_ANTHROPIC_API_KEY }}
+
+  codex:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm install -g @openai/codex
+      - name: Contract tests against the real codex
+        run: npx vitest run test/codex-contract.test.ts
+        env:
+          CODEX_API_KEY: ${{ secrets.CONTRACT_OPENAI_API_KEY }}
