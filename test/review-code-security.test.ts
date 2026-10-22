@@ -236,6 +236,17 @@ describe("the Code & security Review checks", () => {
     expect(check.skipped).not.toMatch(/switch|install the dependencies with npm/i);
   });
 
+  it("report the advisories check as not run, not failed, for a Site that locks its dependencies with Bun", async () => {
+    site = await serveFixtureSite("clean");
+    const { run, report } = await review(site.url, "bun-lockfile");
+
+    expect(run.exitCode).toBe(0);
+    expect(report.passed).toBe(true);
+    const check = checkOf(report, "security/advisories");
+    expect(check.failures).toEqual([]);
+    expect(check.skipped).toMatch(/bun\.lock/);
+  });
+
   it("leave out the checks that read the Site's repository when run outside one, and say so", async () => {
     site = await serveFixtureSite("clean");
     const { run, report } = await review(site.url, undefined);

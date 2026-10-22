@@ -51,6 +51,20 @@ interface Vulnerability {
   fixAvailable: boolean | { name: string; version: string; isSemVerMajor: boolean };
 }
 
+/**
+ * The lockfiles of package managers other than npm. A Site that locks its dependencies in one of
+ * these has fixed its versions; this check just cannot read them yet, so it is not run rather than failed.
+ */
+const OTHER_LOCKFILES = ["pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb", "deno.lock"];
+
+/** The first of `names` that exists in `dir`, if any. */
+async function firstExisting(dir: string, names: string[]): Promise<string | undefined> {
+  for (const name of names) {
+    if (await exists(join(dir, name))) return name;
+  }
+  return undefined;
+}
+
 /** Advisories npm marks "info" are notes, not holes. */
 const SEVERITIES = ["low", "moderate", "high", "critical"];
 
@@ -63,7 +77,7 @@ export const advisoriesCheck: ReviewCheck = {
     const repo = site.repo!;
     if (!(await exists(join(repo, "package.json")))) return [];
     if (!(await exists(join(repo, "package-lock.json"))) && !(await exists(join(repo, "npm-shrinkwrap.json")))) {
-      const other = (await exists(join(repo, "pnpm-lock.yaml"))) ? "pnpm-lock.yaml" : (await exists(join(repo, "yarn.lock"))) ? "yarn.lock" : undefined;
+      const other = await firstExisting(repo, OTHER_LOCKFILES);
       if (other) {
         return {
           notRun: `Not run: this Site locks its dependencies in ${other}, and this check can so far only read npm's package-lock.json, so the review has not checked the dependencies for known advisories. That is a gap in the review, not a fault of the Site; check them with your package manager's own audit command.`,
@@ -71,7 +85,7 @@ export const advisoriesCheck: ReviewCheck = {
       }
       return [
         {
-          reason: "This Site has a package.json but no package-lock.json, so nothing fixes which versions of its dependencies get installed, and the review cannot check them for known advisories. Run npm install in your Site's folder and commit the package-lock.json it writes.",
+          reason: "This Site has a package.json but no lockfile, so nothing fixes which versions of its dependencies get installed, and the review cannot check them for known advisories. Run npm install in your Site's folder and commit the package-lock.json it writes.",
           location: "package-lock.json",
         },
       ];
