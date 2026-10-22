@@ -1,0 +1,33 @@
+# The Agent CLI adapters' real contract tests, against the real CLIs.
+#
+# They spend real model usage, so they run nightly and on demand, not on every pull request.
+# The maintainer sets up once, outside any session:
+#   - an Anthropic API key for Claude Code, in the secret CONTRACT_ANTHROPIC_API_KEY.
+# Until it exists the test is skipped and says why in its title.
+name: Agent CLI contract
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  claude-code:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Claude Code's sandbox on Linux runs commands through bubblewrap and socat.
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap socat
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: Contract tests against the real claude
+        run: npx vitest run test/agent-cli-contract.test.ts
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.CONTRACT_ANTHROPIC_API_KEY }}

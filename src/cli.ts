@@ -7,7 +7,7 @@ import type { Tracker } from "./tracker.ts";
 
 export interface FactoryDeps {
   cwd: string;
-  /** Missing until the Builder's Agent CLI adapter exists. */
+  /** The Builder's Agent CLI (the Claude Code adapter), or a fake in tests. */
   agentCli?: AgentCli;
   /** The Site's issues on GitHub (the GitHub tracker), or a fake in tests. */
   tracker?: Tracker;
