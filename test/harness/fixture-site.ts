@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { readFile, stat } from "node:fs/promises";
+import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { extname, join, normalize } from "node:path";
 
@@ -20,11 +20,18 @@ export interface ServedSite {
   close: () => Promise<void>;
 }
 
-/** Serves one fixture Site from test/fixtures/sites/<name> on a free local port. */
+/**
+ * Serves one fixture Site from test/fixtures/sites/<name> on a free local port,
+ * the way a well-set-up static host does: a folder's index.html answers at the
+ * folder's address with a trailing slash, and the other forms of that address
+ * redirect there, so every page has one URL unless a fixture copies it.
+ */
 export async function serveFixtureSite(name: string): Promise<ServedSite> {
   const root = join(FIXTURES, name);
   const server = createServer(async (request, response) => {
     const path = decodeURIComponent(new URL(request.url ?? "/", "http://fixture").pathname);
+    if (path.endsWith("/index.html")) return redirect(response, path.slice(0, -"index.html".length));
+    if (!path.endsWith("/") && (await isFolder(join(root, normalize(path))))) return redirect(response, `${path}/`);
     const relative = normalize(path.endsWith("/") ? `${path}index.html` : path);
     try {
       const body = await readFile(join(root, relative));
@@ -41,4 +48,13 @@ export async function serveFixtureSite(name: string): Promise<ServedSite> {
     url: `http://127.0.0.1:${port}/`,
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };
+}
+
+function redirect(response: ServerResponse, location: string): void {
+  response.writeHead(301, { location });
+  response.end();
+}
+
+async function isFolder(path: string): Promise<boolean> {
+  return stat(path).then((entry) => entry.isDirectory(), () => false);
 }

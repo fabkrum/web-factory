@@ -2,10 +2,21 @@ import { axeCheck } from "./axe.ts";
 import { launchBrowser } from "./browser.ts";
 import { REVIEW_AREAS, type Failure, type ReviewArea, type ReviewCheck } from "./check.ts";
 import { lighthouseCheck } from "./lighthouse.ts";
+import { oneUrlCheck } from "./one-url.ts";
 import { findRoutes } from "./routes.ts";
+import { sitemapCheck } from "./sitemap.ts";
+import { canonicalCheck, socialPreviewCheck, structuredDataCheck } from "./visibility.ts";
 
 /** Every Review check `factory review` runs. */
-export const REVIEW_CHECKS: ReviewCheck[] = [lighthouseCheck, axeCheck];
+export const REVIEW_CHECKS: ReviewCheck[] = [
+  lighthouseCheck,
+  axeCheck,
+  sitemapCheck,
+  canonicalCheck,
+  oneUrlCheck,
+  socialPreviewCheck,
+  structuredDataCheck,
+];
 
 export interface CheckResult {
   id: string;

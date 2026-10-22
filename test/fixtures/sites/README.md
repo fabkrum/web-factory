@@ -13,3 +13,12 @@ fixture starts as a copy of `clean` with one thing broken.
 inside the layout shift budget of 0.1, and it must Pass. It shows that CLS is
 held to 0.1 rather than zero. `slow-lcp` pads its hero picture to about 700 KB,
 so Lighthouse's slow phone sees it appear well after the LCP budget of 2.5 s.
+
+Every fixture is visible the way the Visibility checks want: a `sitemap.xml`
+named in `robots.txt`, and on every page a canonical URL to its own address plus
+the Open Graph title, description and image. They name the live Site as
+`https://www.example.com`, which is fine: the checks compare paths, because a
+review runs on a Preview or localhost while the tags name the live Site. The
+fixture server redirects a folder's `index.html` and a folder without its
+trailing slash, as a well-set-up static host does, so `duplicate-url` is the only
+fixture with a page at two URLs (its `about/index.html` copies `about.html`).
