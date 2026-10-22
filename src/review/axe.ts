@@ -1,5 +1,5 @@
 import axe, { type AxeResults, type NodeResult, type Result } from "axe-core";
-import { openReviewPage } from "./browser.ts";
+import { openReviewPage, settled } from "./browser.ts";
 import type { Failure, ReviewCheck } from "./check.ts";
 
 /**
@@ -40,15 +40,17 @@ export const axeCheck: ReviewCheck = {
     try {
       for (const route of site.routes) {
         await page.goto(new URL(route, site.url).href, { waitUntil: "load" });
-        await page.addScriptTag({ content: axe.source });
-        const results = await page.evaluate(
-          (tags) =>
-            (globalThis as unknown as { axe: typeof axe }).axe.run(document, {
-              runOnly: { type: "tag", values: tags },
-              resultTypes: ["violations"],
-            }),
-          WCAG_TAGS,
-        );
+        const results = await settled(page, async () => {
+          await page.addScriptTag({ content: axe.source });
+          return page.evaluate(
+            (tags) =>
+              (globalThis as unknown as { axe: typeof axe }).axe.run(document, {
+                runOnly: { type: "tag", values: tags },
+                resultTypes: ["violations"],
+              }),
+            WCAG_TAGS,
+          );
+        });
         failures.push(...failuresOn(route, results));
       }
     } finally {

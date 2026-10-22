@@ -14,9 +14,9 @@ export interface Failure {
 
 /** The served Site a Review check measures. */
 export interface SiteUnderReview {
-  /** Where the address the Builder gave ended up after redirects; the routes are relative to it. */
+  /** Where the address the Builder gave ended up after redirects; the routes are on its origin. */
   url: URL;
-  /** Every route found on the Site, as a path, e.g. "/about.html". */
+  /** Every route found on the Site, as the path and query it answered at, e.g. "/about.html" or "/?p=2". */
   routes: string[];
   browser: Browser;
 }

@@ -90,6 +90,97 @@ describe("factory review finds the Site's routes", () => {
     expect(axeLocations(report!)).toHaveLength(1);
   });
 
+  it("follows links that still name the start address's origin when it redirects elsewhere", async () => {
+    let entryUrl = "";
+    const site = await serve({
+      "/": (_request, response) => {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(page("Home", [`${entryUrl}about`]));
+      },
+      "/about": page("About", ["/"], { faint: true }),
+    });
+    const entry = await serve({ "/": redirect(site.url), "/about": redirect(`${site.url}about`) });
+    entryUrl = entry.url;
+
+    const { run, report } = await reviewJson(entry.url);
+
+    expect(run.exitCode).toBe(1);
+    expect(report!.routes).toEqual(["/", "/about"]);
+    expect(axeLocations(report!)).toEqual([expect.stringMatching(/^\/about /)]);
+  });
+
+  it("keeps a page whose query string changes the document as its own route, and checks it there", async () => {
+    const site = await serve({
+      "/": (request, response) => {
+        const second = new URL(request.url ?? "/", "http://site").searchParams.get("p") === "2";
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(second ? page("Page 2", ["/"], { faint: true }) : page("Home", ["/?p=2"]));
+      },
+    });
+
+    const { run, report } = await reviewJson(site.url);
+
+    expect(run.exitCode).toBe(1);
+    expect(report!.routes).toEqual(["/", "/?p=2"]);
+    expect(axeLocations(report!)).toEqual([expect.stringMatching(/^\/\?p=2 /)]);
+  });
+
+  it("checks a linked page under its query string, not under its bare path", async () => {
+    const site = await serve({
+      "/": page("Home", ["/product?id=3"]),
+      "/product": (request, response) => {
+        if (!new URL(request.url ?? "/", "http://site").searchParams.has("id")) {
+          response.writeHead(404, { "content-type": "text/html; charset=utf-8" });
+          return response.end(page("Not found", [], { faint: true }));
+        }
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(page("Product", ["/"]));
+      },
+    });
+
+    const { run, report } = await reviewJson(site.url);
+
+    expect(run.exitCode).toBe(0);
+    expect(report!.routes).toEqual(["/", "/product?id=3"]);
+  });
+
+  it("checks a start address with a query string at that address", async () => {
+    const site = await serve({
+      "/": (request, response) => {
+        const german = new URL(request.url ?? "/", "http://site").searchParams.get("lang") === "de";
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(page(german ? "Start" : "Home", [], { faint: german }));
+      },
+    });
+
+    const { run, report } = await reviewJson(`${site.url}?lang=de`);
+
+    expect(run.exitCode).toBe(1);
+    expect(report!.routes).toEqual(["/?lang=de"]);
+    expect(axeLocations(report!)).toEqual([expect.stringMatching(/^\/\?lang=de /)]);
+  });
+
+  it("still tries the other form of a page when the first form it meets fails", async () => {
+    const site = await serve({ "/": page("Home", ["/docs", "/docs/"]), "/docs/": page("Docs", ["/"], { faint: true }) });
+
+    const { run, report } = await reviewJson(site.url);
+
+    expect(run.exitCode).toBe(1);
+    expect(report!.routes).toEqual(["/", "/docs/"]);
+  });
+
+  it("reviews a page that sends the browser on with a meta refresh, at the page it lands on", async () => {
+    const alias = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Moved</title><meta http-equiv="refresh" content="0;url=/about"></head><body></body></html>`;
+    const site = await serve({ "/": page("Home", ["/old-about"]), "/old-about": alias, "/about": page("About", ["/"], { faint: true }) });
+
+    const { run, report } = await reviewJson(site.url);
+
+    expect(run.stderr).toBe("");
+    expect(run.exitCode).toBe(1);
+    expect(report!.routes).toEqual(["/", "/about"]);
+    expect(axeLocations(report!)).toEqual([expect.stringMatching(/^\/about /)]);
+  });
+
   it("skips a link the browser cannot parse instead of crashing", async () => {
     const site = await serve({ "/": page("Home", ["http://[bad", "/about"]), "/about": page("About", ["/"]) });
 
