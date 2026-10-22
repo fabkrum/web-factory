@@ -341,6 +341,29 @@ describe("factory loop with two Tickets", () => {
     expect(git(site, "show", `spec/${spec}:two.html`)).toBe("<h1>two</h1>");
   });
 
+  it("does not Pass a Ticket with no commit of its own on the catch-up with what a sibling Passed", async () => {
+    const site = createSiteRepo({ testCommand: "true" });
+    git(site, "config", "merge.ff", "false");
+    const { tracker, spec, first, second } = twoTicketSpec();
+    const agentCli = new FakeAgentCli(
+      () => {},
+      ({ cwd }) => {
+        commitFile(cwd, "two.html", "<h1>two</h1>\n");
+      },
+      () => {},
+    );
+
+    await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
+    expect(tracker.issue(second).state).toBe("closed");
+    const integrationBefore = git(site, "rev-parse", `spec/${spec}`);
+
+    const rerun = await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
+
+    expectNoPass(rerun.exitCode, tracker, first, /no commit/);
+    expect(git(site, "rev-parse", `spec/${spec}`)).toBe(integrationBefore);
+    expect(git(site, "rev-list", "--merges", "--count", `spec/${spec}..ticket/${first}`)).toBe("0");
+  });
+
   it("tells the session to resolve the conflicts when what a sibling Passed does not merge cleanly", async () => {
     const site = createSiteRepo({ testCommand: "grep -q both index.html" });
     const { tracker, spec, first, second } = twoTicketSpec();

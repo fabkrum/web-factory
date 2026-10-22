@@ -221,11 +221,13 @@ async function openWorktree(siteDir: string, ticket: number, integration: string
 
 /**
  * Brings the Ticket's branch up to the integration branch, so work from an earlier
- * run builds on what has Passed since. Says what the session must finish when the merge did not.
+ * run builds on what has Passed since. Fast-forwards when it can, whatever the Site's
+ * `merge.ff` says, so a branch with no work of its own gains no merge commit.
+ * Says what the session must finish when the merge did not.
  */
 async function catchUpWith(worktree: string, integration: string): Promise<string | undefined> {
   if (await gitSucceeds(worktree, "merge-base", "--is-ancestor", integration, "HEAD")) return undefined;
-  if (await gitSucceeds(worktree, "merge", "--quiet", "--no-edit", integration)) return undefined;
+  if (await gitSucceeds(worktree, "merge", "--quiet", "--no-edit", "--ff", integration)) return undefined;
   if (await gitSucceeds(worktree, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")) {
     return `Merging \`${integration}\` into this branch left conflicts. Resolve them and commit the merge before anything else.`;
   }

@@ -8,7 +8,8 @@ const OUTPUT_TAIL_LINES = 30;
 
 /**
  * The gate the script decides, not the model: the session committed something
- * on the Ticket's branch, on top of the integration branch, the Site's test
+ * of its own on the Ticket's branch (a merge that only catches up with the
+ * integration branch is not work), on top of the integration branch, the Site's test
  * command is green, and after the tests nothing is left uncommitted.
  */
 export async function runGate(
@@ -18,7 +19,7 @@ export async function runGate(
   integration: string,
   testCommand: string,
 ): Promise<GateResult> {
-  const commits = Number(await git(worktree, "rev-list", "--count", `${base}..HEAD`));
+  const commits = Number(await git(worktree, "rev-list", "--count", "--no-merges", `${base}..HEAD`));
   if (commits === 0) {
     return { passed: false, reason: "The session produced no commit, so there is no work to check." };
   }
