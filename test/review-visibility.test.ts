@@ -124,6 +124,24 @@ describe("the Visibility Review checks", () => {
     expect(failure!.reason).toMatch(/no canonical/i);
   });
 
+  it("fail a canonical tag that names no address, though it resolves to the page itself", async () => {
+    const withCanonical = (path: string, tag: string) => visiblePage(path, []).replace(/<link rel="canonical"[^>]*>/, tag);
+    const { run, report } = await reviewPages({
+      "/": visiblePage("/", ["/no-href", "/empty", "/blank", "/fragment"]),
+      "/no-href": withCanonical("/no-href", `<link rel="canonical">`),
+      "/empty": withCanonical("/empty", `<link rel="canonical" href="">`),
+      "/blank": withCanonical("/blank", `<link rel="canonical" href="   ">`),
+      "/fragment": withCanonical("/fragment", `<link rel="canonical" href="#">`),
+      "/sitemap.xml": sitemap("/", "/no-href", "/empty", "/blank", "/fragment"),
+    });
+
+    expect(run.exitCode).toBe(1);
+    expect(failingChecks(report)).toEqual(["visibility/canonical"]);
+    const failures = failuresOf(report, "visibility/canonical");
+    expect(failures.map((failure) => failure.location)).toEqual(["/no-href", "/empty", "/blank", "/fragment"]);
+    for (const failure of failures) expect(failure.reason).toMatch(/names no address/i);
+  });
+
   it("fail a canonical URL that points at another page, naming both", async () => {
     const { run, report } = await reviewFixture("wrong-canonical");
 

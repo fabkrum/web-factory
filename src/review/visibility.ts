@@ -98,6 +98,12 @@ export const canonicalCheck = perRoute({ id: "visibility/canonical", name: "Cano
     return fail(`This page names ${canonicals.length} different canonical URLs (${canonicals.join(", ")}), so search engines ignore them all. Keep one, pointing at this page's own address, ${own.pathname}.`);
   }
   const href = canonicals[0]!;
+  // An empty or fragment-only href resolves to the page itself, yet names no address: search engines ignore it.
+  if (href === "" || href.startsWith("#")) {
+    return fail(
+      `This page's canonical tag (<link rel="canonical">) names no address${href ? ` ("${href}")` : ""}, so search engines ignore it and the page has no canonical URL. Point its href at this page's own address, ${own.pathname}.`,
+    );
+  }
   const canonical = parseWebAddress(href, own);
   if (!canonical) return fail(`This page's canonical URL "${href}" is not a web address, so search engines ignore it. Point it at this page's own address, ${own.pathname}.`);
   // The host may differ: a canonical names the live Site, and the review may run on a Preview.
