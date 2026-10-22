@@ -137,9 +137,83 @@ describe("factory loop with one Ticket", () => {
 
     expect(rerun.exitCode, rerun.stderr).toBe(0);
     expect(tracker.issue(ticket).state).toBe("closed");
-    expect(tracker.issue(ticket).comments.every((comment) => /^Pass/.test(comment))).toBe(true);
+    expect(tracker.issue(ticket).comments).toHaveLength(1);
+    expect(tracker.issue(ticket).comments[0]).toMatch(/^Pass/);
     expect(git(site, "rev-parse", `spec/${spec}`)).toBe(ticketCommit);
     expect(existsSync(`${site}/.factory/worktrees/ticket-${ticket}`)).toBe(false);
+  });
+
+  it("builds a reopened Ticket again when its last Pass closed it but reported an error", async () => {
+    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const { tracker, spec, ticket } = oneTicketSpec();
+    const closesThenFails: Tracker = {
+      ticketsOf: (n) => tracker.ticketsOf(n),
+      comment: (n, body) => tracker.comment(n, body),
+      close: async (n) => {
+        await tracker.close(n);
+        throw new Error("GitHub timed out");
+      },
+    };
+    const first = new FakeAgentCli(({ cwd }) => {
+      commitFile(cwd, "index.html", "<h1>hello</h1>\n");
+    });
+
+    await expect(runFactory(["loop", String(spec)], { cwd: site, agentCli: first, tracker: closesThenFails })).rejects.toThrow(/timed out/);
+    expect(tracker.issue(ticket).state).toBe("closed");
+
+    tracker.issue(ticket).state = "open";
+    const rework = new FakeAgentCli(() => {});
+    const rerun = await runFactory(["loop", String(spec)], { cwd: site, agentCli: rework, tracker });
+
+    expect(rework.sessions).toHaveLength(1);
+    expect(rerun.exitCode).not.toBe(0);
+    expect(tracker.issue(ticket).state).toBe("open");
+    expect(tracker.issue(ticket).comments.filter((comment) => /^Pass/.test(comment))).toHaveLength(1);
+  });
+
+  it("does not Pass a Ticket whose session built on the base branch instead of the integration branch", async () => {
+    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const { tracker, spec, ticket } = oneTicketSpec();
+    git(site, "branch", `spec/${spec}`, "main");
+    git(site, "checkout", "--quiet", `spec/${spec}`);
+    commitFile(site, "about.html", "<h1>about</h1>\n", "An earlier Ticket");
+    git(site, "checkout", "--quiet", "main");
+    const integrationBefore = git(site, "rev-parse", `spec/${spec}`);
+    const agentCli = new FakeAgentCli(
+      ({ cwd }) => {
+        git(cwd, "reset", "--quiet", "--hard", "main");
+        commitFile(cwd, "index.html", "<h1>hello</h1>\n");
+      },
+      () => {},
+    );
+
+    const run = await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
+
+    expectNoPass(run.exitCode, tracker, ticket, /does not build on `spec\/\d+`/);
+    expect(git(site, "rev-parse", `spec/${spec}`)).toBe(integrationBefore);
+
+    await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
+    expect(agentCli.sessions).toHaveLength(2);
+  });
+
+  it("does not Pass a Ticket whose integration branch moved on during its session, and builds it again next run", async () => {
+    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const { tracker, spec, ticket } = oneTicketSpec();
+    const agentCli = new FakeAgentCli(
+      ({ cwd }) => {
+        commitFile(cwd, "index.html", "<h1>hello</h1>\n");
+        const elsewhere = git(site, "commit-tree", "-p", `spec/${spec}`, "-m", "Something else", `spec/${spec}^{tree}`);
+        git(site, "update-ref", `refs/heads/spec/${spec}`, elsewhere);
+      },
+      () => {},
+    );
+
+    const run = await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
+
+    expectNoPass(run.exitCode, tracker, ticket, /moved on/);
+
+    await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
+    expect(agentCli.sessions).toHaveLength(2);
   });
 
   it("does not Pass a Ticket whose session failed", async () => {

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { git } from "./git.ts";
+import { git, gitSucceeds } from "./git.ts";
 
 /** A green gate names the commit it tested, so that exact commit is what gets merged. */
 export type GateResult = { passed: true; head: string } | { passed: false; reason: string };
@@ -8,13 +8,25 @@ const OUTPUT_TAIL_LINES = 30;
 
 /**
  * The gate the script decides, not the model: the session committed something
- * on the Ticket's branch, the Site's test command is green, and after the tests
- * nothing is left uncommitted.
+ * on the Ticket's branch, on top of the integration branch, the Site's test
+ * command is green, and after the tests nothing is left uncommitted.
  */
-export async function runGate(worktree: string, base: string, branch: string, testCommand: string): Promise<GateResult> {
+export async function runGate(
+  worktree: string,
+  base: string,
+  branch: string,
+  integration: string,
+  testCommand: string,
+): Promise<GateResult> {
   const commits = Number(await git(worktree, "rev-list", "--count", `${base}..HEAD`));
   if (commits === 0) {
     return { passed: false, reason: "The session produced no commit, so there is no work to check." };
+  }
+  if (!(await gitSucceeds(worktree, "merge-base", "--is-ancestor", base, "HEAD"))) {
+    return {
+      passed: false,
+      reason: `The work does not build on \`${integration}\`, so it cannot be fast-forwarded into it.`,
+    };
   }
 
   const tests = await runShell(worktree, testCommand);
