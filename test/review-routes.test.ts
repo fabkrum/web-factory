@@ -22,8 +22,13 @@ async function serve(pages: Record<string, Answer>): Promise<ServedSite> {
   return site;
 }
 
+/**
+ * Route finding is the same for every Review check; these tests read it through
+ * axe alone, as Lighthouse's repeated runs on every route would add minutes and
+ * no coverage. test/review.test.ts runs every check.
+ */
 async function reviewJson(url: string) {
-  const run = await runFactory(["review", url, "--json"], { cwd: process.cwd() });
+  const run = await runFactory(["review", url, "--json", "--check", "accessibility/axe"], { cwd: process.cwd() });
   return { run, report: run.stdout ? (JSON.parse(run.stdout) as JsonReport) : undefined };
 }
 

@@ -3,7 +3,7 @@ import { systemClock, type Clock } from "./clock.ts";
 import { ConfigError, readSiteConfig } from "./config.ts";
 import { ReviewError } from "./review/check.ts";
 import { formatReport } from "./review/report.ts";
-import { runReview } from "./review/review.ts";
+import { REVIEW_CHECKS, runReview } from "./review/review.ts";
 import { LoopError, runTicketLoop } from "./ticket-loop.ts";
 import type { Host } from "./host.ts";
 import type { Tracker } from "./tracker.ts";
@@ -24,11 +24,14 @@ export interface FactoryDeps {
 
 export const USAGE = `Usage:
   factory loop <spec>             Build the open Tickets of Spec number <spec>, unattended
-  factory review <url> [--json]   Run every Review check on the Site served at <url>
+  factory review <url> [--json] [--check <id>]
+                                  Run every Review check on the Site served at <url>,
+                                  or only the ones named with --check
   factory --help                  Show this help
 
 factory review checks every route its Site links to; a route is the URL's path
 without query string and without a trailing slash (the root stays /).
+Review checks: ${REVIEW_CHECKS.map((check) => check.id).join(", ")}.
 
 Exit codes of factory review: 0 the Site Passes, 1 it did not pass, 2 wrong usage,
 3 the review could not run (the Site could not be opened or the review stopped).
@@ -110,7 +113,18 @@ async function loop(spec: number, deps: FactoryDeps): Promise<number> {
 
 async function review(args: string[], deps: FactoryDeps): Promise<number> {
   const json = args.includes("--json");
-  const rest = args.filter((arg) => arg !== "--json");
+  const rest: string[] = [];
+  const named: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--check") named.push(args[++i] ?? "");
+    else if (args[i] !== "--json") rest.push(args[i]!);
+  }
+  const unknown = named.filter((id) => !REVIEW_CHECKS.some((check) => check.id === id));
+  if (unknown.length > 0) {
+    deps.stderr(`factory review has no Review check named ${unknown.map((id) => JSON.stringify(id)).join(", ")}.\n\n${USAGE}`);
+    return 2;
+  }
+  const checks = named.length > 0 ? REVIEW_CHECKS.filter((check) => named.includes(check.id)) : REVIEW_CHECKS;
   const url = rest.length === 1 ? webAddress(rest[0]!) : undefined;
   if (!url) {
     deps.stderr(
@@ -119,7 +133,7 @@ async function review(args: string[], deps: FactoryDeps): Promise<number> {
     return 2;
   }
   try {
-    const report = await runReview(url);
+    const report = await runReview(url, checks);
     deps.stdout(json ? `${JSON.stringify(report, null, 2)}\n` : formatReport(report));
     return report.passed ? 0 : 1;
   } catch (error) {

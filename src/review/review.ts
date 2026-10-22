@@ -1,10 +1,11 @@
 import { axeCheck } from "./axe.ts";
 import { launchBrowser } from "./browser.ts";
 import { REVIEW_AREAS, type Failure, type ReviewArea, type ReviewCheck } from "./check.ts";
+import { lighthouseCheck } from "./lighthouse.ts";
 import { findRoutes } from "./routes.ts";
 
 /** Every Review check `factory review` runs. */
-export const REVIEW_CHECKS: ReviewCheck[] = [axeCheck];
+export const REVIEW_CHECKS: ReviewCheck[] = [lighthouseCheck, axeCheck];
 
 export interface CheckResult {
   id: string;
