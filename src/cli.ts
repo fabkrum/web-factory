@@ -1,4 +1,5 @@
 import type { AgentCli } from "./agent-cli.ts";
+import { systemClock, type Clock } from "./clock.ts";
 import { ConfigError, readSiteConfig } from "./config.ts";
 import { LoopError, runTicketLoop } from "./ticket-loop.ts";
 import type { Tracker } from "./tracker.ts";
@@ -9,6 +10,8 @@ export interface FactoryDeps {
   agentCli?: AgentCli;
   /** Missing until the GitHub tracker exists. */
   tracker?: Tracker;
+  /** The real clock unless a test fakes it. */
+  clock?: Clock;
   stdout: (text: string) => void;
   stderr: (text: string) => void;
 }
@@ -55,6 +58,7 @@ async function loop(spec: number, deps: FactoryDeps): Promise<number> {
       config,
       agentCli: deps.agentCli,
       tracker: deps.tracker,
+      clock: deps.clock ?? systemClock,
       log: (line) => deps.stdout(`${line}\n`),
     });
     const list = (tickets: number[]) => tickets.map((n) => `#${n}`).join(", ");

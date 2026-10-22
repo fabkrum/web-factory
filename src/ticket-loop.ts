@@ -7,6 +7,7 @@ import { branchExists, git, gitSucceeds, worktreeOf } from "./git.ts";
 import { recordTicketState, type TicketState } from "./loop-state.ts";
 import { stageLabel } from "./stages.ts";
 import type { AgentCli } from "./agent-cli.ts";
+import type { Clock } from "./clock.ts";
 import type { Issue, IssueEvent, Tracker } from "./tracker.ts";
 
 /** Local, uncommitted Factory state in the Site repository: worktrees and the loop's state per Spec. */
@@ -18,6 +19,7 @@ export interface LoopOptions {
   config: SiteConfig;
   agentCli: AgentCli;
   tracker: Tracker;
+  clock: Clock;
   log: (line: string) => void;
 }
 
@@ -32,6 +34,9 @@ type Outcome = "passed" | "parked" | "not-passed";
 
 /** A reason the loop cannot run at all, said in plain words. */
 export class LoopError extends Error {}
+
+/** How long the loop waits when a rate limit reports a time that has already passed, so it never retries in a tight loop. */
+const MIN_RATE_LIMIT_WAIT_MS = 60 * 1000;
 
 export const integrationBranch = (spec: number): string => `spec/${spec}`;
 export const ticketBranch = (ticket: number): string => `ticket/${ticket}`;
@@ -138,12 +143,10 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
       ]);
     }
     if (session.kind === "rate-limited") {
-      // Hitting the plan's limit is not the Ticket's failure, so it neither counts as an attempt nor parks.
-      reason = `The Agent CLI hit its rate limit until ${session.until.toISOString()}.`;
-      log(`Ticket #${ticket.number}: not passed. ${reason}`);
-      await options.tracker.comment(ticket.number, `Not passed yet. ${reason}\n\nThe work so far stays on \`${branch}\`.`);
-      await record(options, ticket, { status: "not-passed", attempts: attempt, reason });
-      return "not-passed";
+      // Hitting the plan's limit is not the Ticket's failure: wait it out and resume the same attempt.
+      await waitOutRateLimit(ticket, options, attempt, session.until);
+      attempt--;
+      continue;
     }
 
     const gate =
@@ -174,6 +177,18 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
     `The work so far stays on \`${branch}\` in \`${relative(siteDir, worktree)}\`. ` +
       "Say in a comment on this Ticket what should change, then run the Ticket loop again.",
   ]);
+}
+
+/** Sleeps until the Agent CLI's rate limit lifts, showing the Ticket as waiting on the board meanwhile. */
+async function waitOutRateLimit(ticket: Issue, options: LoopOptions, attempt: number, until: Date): Promise<void> {
+  const { clock, log } = options;
+  const ms = Math.max(until.getTime() - clock.now().getTime(), MIN_RATE_LIMIT_WAIT_MS);
+  const resume = new Date(clock.now().getTime() + ms);
+  const reason = `The Agent CLI hit its plan's rate limit, so the Ticket loop waits until ${resume.toISOString()} and then resumes this Ticket.`;
+  log(`Ticket #${ticket.number}: ${reason}`);
+  await record(options, ticket, { status: "waiting", attempts: attempt, reason });
+  await clock.sleep(ms);
+  log(`Ticket #${ticket.number}: the rate limit has lifted, resuming`);
 }
 
 /** Leaves the Ticket open in its Stage, says why on it, and marks it parked for the board. */
