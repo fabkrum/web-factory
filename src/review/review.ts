@@ -64,7 +64,12 @@ export async function runReview(url: URL, checks: ReviewCheck[] = REVIEW_CHECKS,
         results.set(check, { id: check.id, name: check.name, passed: true, failures: [], skipped: NO_REPO });
         continue;
       }
-      const failures = await check.run(site);
+      const outcome = await check.run(site);
+      if ("notRun" in outcome) {
+        results.set(check, { id: check.id, name: check.name, passed: true, failures: [], skipped: outcome.notRun });
+        continue;
+      }
+      const failures = outcome;
       results.set(check, { id: check.id, name: check.name, passed: failures.length === 0, failures });
     }
     const areas = REVIEW_AREAS.map((area) => ({

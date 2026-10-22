@@ -33,4 +33,6 @@ The Code & security checks that read the Site's repository (its own tests and
 its dependency advisories) take a Site repository from `../repos`, not a fixture
 Site: `clean` passes, `red-tests` has a test command that fails,
 `vulnerable-dependency` locks a version the fake npm registry has an advisory
-for, and `no-lockfile` has no `package-lock.json`.
+for, `no-lockfile` has no `package-lock.json`, and `pnpm-lockfile` locks its
+dependencies in `pnpm-lock.yaml` instead, which the advisories check reports as
+not run.

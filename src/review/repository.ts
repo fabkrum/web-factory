@@ -64,11 +64,14 @@ export const advisoriesCheck: ReviewCheck = {
     if (!(await exists(join(repo, "package.json")))) return [];
     if (!(await exists(join(repo, "package-lock.json"))) && !(await exists(join(repo, "npm-shrinkwrap.json")))) {
       const other = (await exists(join(repo, "pnpm-lock.yaml"))) ? "pnpm-lock.yaml" : (await exists(join(repo, "yarn.lock"))) ? "yarn.lock" : undefined;
+      if (other) {
+        return {
+          notRun: `Not run: this Site locks its dependencies in ${other}, and this check can so far only read npm's package-lock.json, so the review has not checked the dependencies for known advisories. That is a gap in the review, not a fault of the Site; check them with your package manager's own audit command.`,
+        };
+      }
       return [
         {
-          reason: other
-            ? `This Site locks its dependencies in ${other}, and the review can only check npm's package-lock.json for known advisories, so it could not check them. Install the dependencies with npm and commit its package-lock.json.`
-            : "This Site has a package.json but no package-lock.json, so nothing fixes which versions of its dependencies get installed, and the review cannot check them for known advisories. Run npm install in your Site's folder and commit the package-lock.json it writes.",
+          reason: "This Site has a package.json but no package-lock.json, so nothing fixes which versions of its dependencies get installed, and the review cannot check them for known advisories. Run npm install in your Site's folder and commit the package-lock.json it writes.",
           location: "package-lock.json",
         },
       ];
