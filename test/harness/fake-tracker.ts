@@ -1,4 +1,4 @@
-import type { Issue, IssueEvent, Tracker } from "../../src/tracker.ts";
+import type { Issue, IssueEvent, PullRequest, Tracker } from "../../src/tracker.ts";
 
 export interface FakeIssue extends Issue {
   parent?: number;
@@ -6,9 +6,18 @@ export interface FakeIssue extends Issue {
   history: IssueEvent[];
 }
 
-/** An in-memory stand-in for the Site's GitHub issues. */
+export interface FakePullRequest extends PullRequest {
+  head: string;
+  base: string;
+  title: string;
+  body: string;
+  state: "open" | "merged";
+}
+
+/** An in-memory stand-in for the Site's GitHub issues and pull requests. */
 export class FakeTracker implements Tracker {
   readonly #issues = new Map<number, FakeIssue>();
+  readonly pullRequests: FakePullRequest[] = [];
   #next = 1;
 
   addSpec(title: string, body = ""): number {
@@ -17,6 +26,17 @@ export class FakeTracker implements Tracker {
 
   addTicket(spec: number, title: string, body = "", labels = ["stage:build"]): number {
     return this.#add({ title, body, labels, parent: spec });
+  }
+
+  /** Records that `blocker` blocks `ticket`, as GitHub's issue dependencies do. */
+  block(ticket: number, { by }: { by: number }): void {
+    this.issue(ticket).blockedBy.push(by);
+  }
+
+  /** The Builder closes an issue by hand. */
+  closeByHand(number: number): void {
+    this.issue(number).state = "closed";
+    this.issue(number).history.push({ kind: "closed" });
   }
 
   issue(number: number): FakeIssue {
@@ -36,7 +56,23 @@ export class FakeTracker implements Tracker {
     this.issue(spec);
     return [...this.#issues.values()]
       .filter((issue) => issue.parent === spec)
-      .map(({ number, title, body, state, labels }) => ({ number, title, body, state, labels: [...labels] }));
+      .map((issue) => this.#copy(issue));
+  }
+
+  async getIssue(number: number): Promise<Issue> {
+    return this.#copy(this.issue(number));
+  }
+
+  async pullRequestFrom(head: string): Promise<PullRequest | undefined> {
+    const found = this.pullRequests.find((pr) => pr.head === head && pr.state === "open");
+    return found && { number: found.number, url: found.url };
+  }
+
+  async openPullRequest(fields: { head: string; base: string; title: string; body: string }): Promise<PullRequest> {
+    const number = this.#next++;
+    const url = `https://github.example.test/site/pull/${number}`;
+    this.pullRequests.push({ number, url, state: "open", ...fields });
+    return { number, url };
   }
 
   async historyOf(number: number): Promise<IssueEvent[]> {
@@ -57,7 +93,11 @@ export class FakeTracker implements Tracker {
 
   #add(fields: { title: string; body: string; labels: string[]; parent?: number }): number {
     const number = this.#next++;
-    this.#issues.set(number, { number, state: "open", comments: [], history: [], ...fields });
+    this.#issues.set(number, { number, state: "open", comments: [], history: [], blockedBy: [], ...fields });
     return number;
+  }
+
+  #copy({ number, title, body, state, labels, blockedBy }: FakeIssue): Issue {
+    return { number, title, body, state, labels: [...labels], blockedBy: [...blockedBy] };
   }
 }

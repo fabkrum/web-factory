@@ -8,7 +8,8 @@ import { recordTicketState, type TicketState } from "./loop-state.ts";
 import { stageLabel } from "./stages.ts";
 import type { AgentCli } from "./agent-cli.ts";
 import type { Clock } from "./clock.ts";
-import type { Issue, IssueEvent, Tracker } from "./tracker.ts";
+import type { Host } from "./host.ts";
+import type { Issue, IssueEvent, PullRequest, Tracker } from "./tracker.ts";
 
 /** Local, uncommitted Factory state in the Site repository: worktrees and the loop's state per Spec. */
 const LOCAL_DIR = ".factory";
@@ -19,6 +20,7 @@ export interface LoopOptions {
   config: SiteConfig;
   agentCli: AgentCli;
   tracker: Tracker;
+  host: Host;
   clock: Clock;
   log: (line: string) => void;
 }
@@ -28,6 +30,16 @@ export interface LoopResult {
   /** Waiting for the Builder, with the reason on the Ticket. */
   parked: number[];
   notPassed: number[];
+  /** Never started, because a blocker did not Pass; the reason is in the loop's local state. */
+  blocked: { ticket: number; reason: string }[];
+  /** The Spec's pull request, once every Ticket of the Spec has Passed. */
+  pullRequest?: SpecPullRequest;
+}
+
+export interface SpecPullRequest extends PullRequest {
+  /** The Preview URL from the host, or undefined when the pull request was already open from an earlier run. */
+  preview?: string;
+  opened: boolean;
 }
 
 type Outcome = "passed" | "parked" | "not-passed";
@@ -37,6 +49,9 @@ export class LoopError extends Error {}
 
 /** How long the loop waits when a rate limit reports a time that has already passed, so it never retries in a tight loop. */
 const MIN_RATE_LIMIT_WAIT_MS = 60 * 1000;
+
+/** The remote the Spec's integration branch is pushed to for its pull request. */
+const REMOTE = "origin";
 
 export const integrationBranch = (spec: number): string => `spec/${spec}`;
 export const ticketBranch = (ticket: number): string => `ticket/${ticket}`;
@@ -49,13 +64,18 @@ export async function runTicketLoop(options: LoopOptions): Promise<LoopResult> {
   if (!(await branchExists(siteDir, config.baseBranch))) {
     throw new LoopError(`The base branch ${config.baseBranch} does not exist in this Site repository.`);
   }
+  if (integrationBranch(spec) === config.baseBranch) {
+    throw new LoopError(`The base branch ${config.baseBranch} is also the Spec's integration branch, and the Ticket loop never moves the base branch.`);
+  }
 
-  const tickets = (await tracker.ticketsOf(spec))
+  const all = await tracker.ticketsOf(spec);
+  const tickets = all
     .filter((ticket) => ticket.state === "open" && ticket.labels.includes(stageLabel("build")))
     .sort((a, b) => a.number - b.number);
-  if (tickets.length === 0) {
+  const result: LoopResult = { passed: [], parked: [], notPassed: [], blocked: [] };
+  if (tickets.length === 0 && !specDone(all)) {
     log(`Spec #${spec} has no open Tickets in the Build Stage, so there is nothing to build.`);
-    return { passed: [], parked: [], notPassed: [] };
+    return result;
   }
 
   await keepLocalStateOutOfGit(siteDir);
@@ -64,12 +84,133 @@ export async function runTicketLoop(options: LoopOptions): Promise<LoopResult> {
     await git(siteDir, "branch", integration, config.baseBranch);
   }
 
-  const result: LoopResult = { passed: [], parked: [], notPassed: [] };
-  for (const ticket of tickets) {
-    const outcome = await buildTicket(ticket, options);
-    ({ passed: result.passed, parked: result.parked, "not-passed": result.notPassed })[outcome].push(ticket.number);
+  // Lowest unblocked Ticket first, looking again after every Ticket: a Pass may unblock a lower one.
+  const outcomes = new Map<number, Outcome>();
+  const states = new Map(all.map((ticket) => [ticket.number, ticket.state]));
+  const pending = [...tickets];
+  for (;;) {
+    const next = await firstUnblocked(pending, states, options);
+    if (!next) break;
+    pending.splice(pending.indexOf(next), 1);
+    const outcome = await buildTicket(next, options);
+    outcomes.set(next.number, outcome);
+    if (outcome === "passed") states.set(next.number, "closed");
+    ({ passed: result.passed, parked: result.parked, "not-passed": result.notPassed })[outcome].push(next.number);
+  }
+  for (const ticket of pending) {
+    const reason = await whyBlocked(ticket, pending, outcomes, states, options);
+    log(`Ticket #${ticket.number}: not started. ${reason}`);
+    await record(options, ticket, { status: "blocked", attempts: 0, reason });
+    result.blocked.push({ ticket: ticket.number, reason });
+  }
+
+  if (specDone(await tracker.ticketsOf(spec))) {
+    result.pullRequest = await openSpecPullRequest(options);
   }
   return result;
+}
+
+function specDone(tickets: Issue[]): boolean {
+  return tickets.length > 0 && tickets.every((ticket) => ticket.state === "closed");
+}
+
+/** The lowest pending Ticket whose blockers are all closed, which for a Ticket of the Spec means it Passed. */
+async function firstUnblocked(pending: Issue[], states: Map<number, Issue["state"]>, options: LoopOptions): Promise<Issue | undefined> {
+  for (const ticket of pending) {
+    let unblocked = true;
+    for (const blocker of ticket.blockedBy) {
+      if ((await stateOf(blocker, states, options)) !== "closed") {
+        unblocked = false;
+        break;
+      }
+    }
+    if (unblocked) return ticket;
+  }
+  return undefined;
+}
+
+/** A blocker's state: known for the Spec's Tickets, looked up once for any other issue. */
+async function stateOf(issue: number, states: Map<number, Issue["state"]>, options: LoopOptions): Promise<Issue["state"]> {
+  let state = states.get(issue);
+  if (state === undefined) {
+    state = (await options.tracker.getIssue(issue)).state;
+    states.set(issue, state);
+  }
+  return state;
+}
+
+/** Why a Ticket was never started, naming its first blocker that is still open. */
+async function whyBlocked(
+  ticket: Issue,
+  pending: Issue[],
+  outcomes: Map<number, Outcome>,
+  states: Map<number, Issue["state"]>,
+  options: LoopOptions,
+): Promise<string> {
+  for (const blocker of ticket.blockedBy) {
+    if ((await stateOf(blocker, states, options)) === "closed") continue;
+    const outcome = outcomes.get(blocker);
+    const waits = `It waits for #${blocker}`;
+    if (outcome === "parked") return `${waits}, which is parked and waiting for you. Once #${blocker} passes, the Ticket loop builds this one.`;
+    if (outcome === "not-passed") return `${waits}, which did not pass. Once #${blocker} passes, the Ticket loop builds this one.`;
+    if (pending.some((other) => other.number === blocker)) {
+      return `${waits}, which is itself waiting for a blocker. Once #${blocker} passes, the Ticket loop builds this one.`;
+    }
+    return `${waits}, which is still open and is not a Ticket in the Build Stage of this Spec. Once #${blocker} is done, the Ticket loop builds this one.`;
+  }
+  return "It waits for a blocker that is still open.";
+}
+
+/**
+ * Pushes the Spec's integration branch, and only it, and opens one pull request
+ * against the base branch with the host's Preview URL. A rerun pushes again and
+ * finds the open pull request instead of opening a second one.
+ */
+async function openSpecPullRequest(options: LoopOptions): Promise<SpecPullRequest | undefined> {
+  const { siteDir, spec, config, tracker, host, log } = options;
+  const integration = integrationBranch(spec);
+  if (!(await branchExists(siteDir, integration))) return undefined;
+  if (await gitSucceeds(siteDir, "merge-base", "--is-ancestor", integration, config.baseBranch)) {
+    log(`Spec #${spec}: every Ticket is done, but ${integration} holds nothing that ${config.baseBranch} does not, so there is no pull request to open.`);
+    return undefined;
+  }
+  if (!(await gitSucceeds(siteDir, "remote", "get-url", REMOTE))) {
+    throw new LoopError(
+      `Every Ticket of Spec #${spec} passed, but this Site repository has no remote called ${REMOTE}, so ${integration} cannot become a pull request. Connect the Site to GitHub, then run the Ticket loop again.`,
+    );
+  }
+  // An explicit refspec, so the push can only ever move the integration branch on the remote.
+  try {
+    await git(siteDir, "push", "--quiet", REMOTE, `refs/heads/${integration}:refs/heads/${integration}`);
+  } catch (error) {
+    throw new LoopError(`Every Ticket of Spec #${spec} passed, but pushing ${integration} to ${REMOTE} failed: ${(error as Error).message.trim()}`);
+  }
+
+  const existing = await tracker.pullRequestFrom(integration);
+  if (existing) {
+    log(`Spec #${spec}: pushed ${integration}, which updates its pull request #${existing.number}`);
+    return { ...existing, opened: false };
+  }
+  const preview = await host.deployPreview({ siteDir, branch: integration });
+  const specIssue = await tracker.getIssue(spec);
+  const tickets = (await tracker.ticketsOf(spec)).sort((a, b) => a.number - b.number);
+  const pullRequest = await tracker.openPullRequest({
+    head: integration,
+    base: config.baseBranch,
+    title: specIssue.title,
+    body: [
+      `Every Ticket of Spec #${spec} passed the Ticket loop, and this pull request holds them all.`,
+      "",
+      `Preview: ${preview}`,
+      "",
+      "Tickets:",
+      ...tickets.map((ticket) => `- #${ticket.number} ${ticket.title}`),
+      "",
+      `Read the Preview. When the Site does what Spec #${spec} asks, merge this pull request to Approve it.`,
+    ].join("\n"),
+  });
+  log(`Spec #${spec}: opened pull request #${pullRequest.number} with the Preview ${preview}`);
+  return { ...pullRequest, preview, opened: true };
 }
 
 async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome> {

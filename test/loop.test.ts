@@ -123,6 +123,9 @@ describe("factory loop with one Ticket", () => {
     });
     const closeFails: Tracker = {
       ticketsOf: (n) => tracker.ticketsOf(n),
+      getIssue: (n) => tracker.getIssue(n),
+      pullRequestFrom: (head) => tracker.pullRequestFrom(head),
+      openPullRequest: (pr) => tracker.openPullRequest(pr),
       historyOf: (n) => tracker.historyOf(n),
       comment: (n, body) => tracker.comment(n, body),
       close: async () => {
@@ -149,6 +152,9 @@ describe("factory loop with one Ticket", () => {
     const { tracker, spec, ticket } = oneTicketSpec();
     const closesThenFails: Tracker = {
       ticketsOf: (n) => tracker.ticketsOf(n),
+      getIssue: (n) => tracker.getIssue(n),
+      pullRequestFrom: (head) => tracker.pullRequestFrom(head),
+      openPullRequest: (pr) => tracker.openPullRequest(pr),
       historyOf: (n) => tracker.historyOf(n),
       comment: (n, body) => tracker.comment(n, body),
       close: async (n) => {
@@ -182,6 +188,9 @@ describe("factory loop with one Ticket", () => {
     });
     const commentsThenFails: Tracker = {
       ticketsOf: (n) => tracker.ticketsOf(n),
+      getIssue: (n) => tracker.getIssue(n),
+      pullRequestFrom: (head) => tracker.pullRequestFrom(head),
+      openPullRequest: (pr) => tracker.openPullRequest(pr),
       historyOf: (n) => tracker.historyOf(n),
       comment: async (n, body) => {
         await tracker.comment(n, body);
@@ -220,6 +229,9 @@ describe("factory loop with one Ticket", () => {
     });
     const commentsThenFails: Tracker = {
       ticketsOf: (n) => tracker.ticketsOf(n),
+      getIssue: (n) => tracker.getIssue(n),
+      pullRequestFrom: (head) => tracker.pullRequestFrom(head),
+      openPullRequest: (pr) => tracker.openPullRequest(pr),
       historyOf: (n) => tracker.historyOf(n),
       comment: async (n, body) => {
         await tracker.comment(n, body);

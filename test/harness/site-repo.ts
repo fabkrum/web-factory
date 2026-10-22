@@ -20,7 +20,7 @@ export function commitFile(dir: string, path: string, content: string, message =
   return git(dir, "rev-parse", "HEAD");
 }
 
-/** A throwaway Site repository on `main` with its Factory config committed. */
+/** A throwaway Site repository on `main` with its Factory config committed, and a bare `origin` it pushes to. */
 export function createSiteRepo(config: { testCommand: string; maxAttempts?: number }): string {
   const dir = mkdtempSync(join(tmpdir(), "web-factory-site-"));
   git(dir, "init", "-q", "-b", "main");
@@ -31,5 +31,15 @@ export function createSiteRepo(config: { testCommand: string; maxAttempts?: numb
   commitFile(dir, "README.md", "# A Site\n", "Start the Site");
   git(dir, "add", "factory.json");
   git(dir, "commit", "-q", "-m", "Add the Factory config");
+  const origin = mkdtempSync(join(tmpdir(), "web-factory-origin-"));
+  git(origin, "init", "-q", "--bare");
+  git(dir, "remote", "add", "origin", origin);
+  git(dir, "push", "-q", "origin", "main");
   return dir;
+}
+
+/** The commit a branch points at in the Site's `origin`, or undefined when `origin` does not have it. */
+export function originBranch(site: string, branch: string): string | undefined {
+  const line = git(site, "ls-remote", "--heads", "origin", `refs/heads/${branch}`);
+  return line === "" ? undefined : line.split(/\s/)[0];
 }

@@ -2,6 +2,7 @@ import type { AgentCli } from "./agent-cli.ts";
 import { systemClock, type Clock } from "./clock.ts";
 import { ConfigError, readSiteConfig } from "./config.ts";
 import { LoopError, runTicketLoop } from "./ticket-loop.ts";
+import type { Host } from "./host.ts";
 import type { Tracker } from "./tracker.ts";
 
 export interface FactoryDeps {
@@ -10,6 +11,8 @@ export interface FactoryDeps {
   agentCli?: AgentCli;
   /** Missing until the GitHub tracker exists. */
   tracker?: Tracker;
+  /** Missing until the Builder's host adapter exists. */
+  host?: Host;
   /** The real clock unless a test fakes it. */
   clock?: Clock;
   stdout: (text: string) => void;
@@ -48,8 +51,8 @@ export async function factory(argv: string[], deps: FactoryDeps): Promise<number
 async function loop(spec: number, deps: FactoryDeps): Promise<number> {
   try {
     const config = await readSiteConfig(deps.cwd);
-    if (!deps.agentCli || !deps.tracker) {
-      deps.stderr("This version of the Factory cannot reach an Agent CLI or GitHub yet, so factory loop cannot run.\n");
+    if (!deps.agentCli || !deps.tracker || !deps.host) {
+      deps.stderr("This version of the Factory cannot reach an Agent CLI, GitHub or a host yet, so factory loop cannot run.\n");
       return 1;
     }
     const result = await runTicketLoop({
@@ -58,6 +61,7 @@ async function loop(spec: number, deps: FactoryDeps): Promise<number> {
       config,
       agentCli: deps.agentCli,
       tracker: deps.tracker,
+      host: deps.host,
       clock: deps.clock ?? systemClock,
       log: (line) => deps.stdout(`${line}\n`),
     });
@@ -68,7 +72,19 @@ async function loop(spec: number, deps: FactoryDeps): Promise<number> {
     if (result.notPassed.length > 0) {
       deps.stdout(`Not passed: ${list(result.notPassed)}. The reason is on each Ticket.\n`);
     }
-    return result.parked.length + result.notPassed.length > 0 ? 1 : 0;
+    if (result.blocked.length > 0) {
+      deps.stdout(`Not started, waiting for a blocker: ${list(result.blocked.map((b) => b.ticket))}.\n`);
+      for (const { ticket, reason } of result.blocked) deps.stdout(`  #${ticket}: ${reason}\n`);
+    }
+    const pr = result.pullRequest;
+    if (pr) {
+      deps.stdout(
+        pr.opened
+          ? `Spec #${spec} is built. Read its Preview at ${pr.preview}, then merge pull request #${pr.number} to Approve it: ${pr.url}\n`
+          : `Spec #${spec} is built and its pull request #${pr.number} is up to date: ${pr.url}\n`,
+      );
+    }
+    return result.parked.length + result.notPassed.length + result.blocked.length > 0 ? 1 : 0;
   } catch (error) {
     if (error instanceof ConfigError || error instanceof LoopError) {
       deps.stderr(`${error.message}\n`);
