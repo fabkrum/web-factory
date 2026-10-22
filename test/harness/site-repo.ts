@@ -21,7 +21,7 @@ export function commitFile(dir: string, path: string, content: string, message =
 }
 
 /** A throwaway Site repository on `main` with its Factory config committed. */
-export function createSiteRepo(config: { testCommand: string }): string {
+export function createSiteRepo(config: { testCommand: string; maxAttempts?: number }): string {
   const dir = mkdtempSync(join(tmpdir(), "web-factory-site-"));
   git(dir, "init", "-q", "-b", "main");
   git(dir, "config", "user.name", "Test Builder");

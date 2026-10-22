@@ -14,4 +14,6 @@ The Factory package is `@fabkrum/web-factory`, with the command `factory`. It is
 - `npm run typecheck` checks the types.
 - `npm run build` compiles `src/` to `dist/`, which `bin/factory.js` runs.
 
-A Site records its Factory settings in `factory.json` at its root: `testCommand` (what green means for its stack), and optionally `baseBranch` (default `main`) and `sessionTimeoutMs`.
+A Site records its Factory settings in `factory.json` at its root: `testCommand` (what green means for its stack), and optionally `baseBranch` (default `main`), `sessionTimeoutMs` and `maxAttempts` (how many Build sessions a Ticket gets in one run before it parks, default 3).
+
+The Ticket loop keeps its local state per Spec in `.factory/spec-<number>.json` (kept out of git): each Ticket's status (`building`, `passed`, `parked`, `not-passed`), its attempt count and, when it is stuck, the reason in plain words. The board reads it. A parked Ticket waits for the Builder: the loop leaves it alone until something happens on the Ticket after its park comment, such as the Builder's answer, and then builds it again with that answer in the prompt.

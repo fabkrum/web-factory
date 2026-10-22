@@ -50,7 +50,7 @@ describe("factory loop with one Ticket", () => {
   });
 
   it("does not Pass a Ticket whose session produced no commit", async () => {
-    const site = createSiteRepo({ testCommand: "true" });
+    const site = createSiteRepo({ testCommand: "true", maxAttempts: 1 });
     const { tracker, spec, ticket } = oneTicketSpec();
     const agentCli = new FakeAgentCli(() => {});
 
@@ -61,7 +61,7 @@ describe("factory loop with one Ticket", () => {
   });
 
   it("does not Pass a Ticket whose session left the tree dirty", async () => {
-    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const site = createSiteRepo({ testCommand: TEST_COMMAND, maxAttempts: 1 });
     const { tracker, spec, ticket } = oneTicketSpec();
     const agentCli = new FakeAgentCli(({ cwd }) => {
       commitFile(cwd, "index.html", "<h1>hello</h1>\n");
@@ -75,7 +75,7 @@ describe("factory loop with one Ticket", () => {
   });
 
   it("does not Pass a Ticket whose test command is red", async () => {
-    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const site = createSiteRepo({ testCommand: TEST_COMMAND, maxAttempts: 1 });
     const { tracker, spec, ticket } = oneTicketSpec();
     const agentCli = new FakeAgentCli(({ cwd }) => {
       commitFile(cwd, "index.html", "<h1>goodbye</h1>\n");
@@ -88,7 +88,7 @@ describe("factory loop with one Ticket", () => {
   });
 
   it("does not Pass a Ticket whose test command leaves a file behind", async () => {
-    const site = createSiteRepo({ testCommand: `${TEST_COMMAND} && touch report.txt` });
+    const site = createSiteRepo({ testCommand: `${TEST_COMMAND} && touch report.txt`, maxAttempts: 1 });
     const { tracker, spec, ticket } = oneTicketSpec();
     const agentCli = new FakeAgentCli(({ cwd }) => {
       commitFile(cwd, "index.html", "<h1>hello</h1>\n");
@@ -101,7 +101,7 @@ describe("factory loop with one Ticket", () => {
   });
 
   it("does not Pass a Ticket whose session committed on another branch", async () => {
-    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const site = createSiteRepo({ testCommand: TEST_COMMAND, maxAttempts: 1 });
     const { tracker, spec, ticket } = oneTicketSpec();
     const agentCli = new FakeAgentCli(({ cwd }) => {
       git(cwd, "checkout", "--quiet", "-b", "other");
@@ -145,7 +145,7 @@ describe("factory loop with one Ticket", () => {
   });
 
   it("builds a reopened Ticket again when its last Pass closed it but reported an error", async () => {
-    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const site = createSiteRepo({ testCommand: TEST_COMMAND, maxAttempts: 1 });
     const { tracker, spec, ticket } = oneTicketSpec();
     const closesThenFails: Tracker = {
       ticketsOf: (n) => tracker.ticketsOf(n),
@@ -174,7 +174,7 @@ describe("factory loop with one Ticket", () => {
   });
 
   it("only closes on the next run a Ticket whose Pass comment went through but reported an error, and builds it again once reopened", async () => {
-    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const site = createSiteRepo({ testCommand: TEST_COMMAND, maxAttempts: 1 });
     const { tracker, spec, ticket } = oneTicketSpec();
     let ticketCommit = "";
     const first = new FakeAgentCli(({ cwd }) => {
@@ -213,7 +213,7 @@ describe("factory loop with one Ticket", () => {
   });
 
   it("does not finish a broken-off Pass whose Ticket was closed and reopened since, but builds it again", async () => {
-    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const site = createSiteRepo({ testCommand: TEST_COMMAND, maxAttempts: 1 });
     const { tracker, spec, ticket } = oneTicketSpec();
     const first = new FakeAgentCli(({ cwd }) => {
       commitFile(cwd, "index.html", "<h1>hello</h1>\n");
@@ -241,7 +241,7 @@ describe("factory loop with one Ticket", () => {
   });
 
   it("does not Pass a Ticket whose session built on the base branch instead of the integration branch", async () => {
-    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const site = createSiteRepo({ testCommand: TEST_COMMAND, maxAttempts: 1 });
     const { tracker, spec, ticket } = oneTicketSpec();
     git(site, "branch", `spec/${spec}`, "main");
     git(site, "checkout", "--quiet", `spec/${spec}`);
@@ -261,12 +261,13 @@ describe("factory loop with one Ticket", () => {
     expectNoPass(run.exitCode, tracker, ticket, /does not build on `spec\/\d+`/);
     expect(git(site, "rev-parse", `spec/${spec}`)).toBe(integrationBefore);
 
+    await tracker.comment(ticket, "Try again, please.");
     await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
     expect(agentCli.sessions).toHaveLength(2);
   });
 
   it("does not Pass a Ticket whose integration branch moved on during its session, and builds it again next run", async () => {
-    const site = createSiteRepo({ testCommand: TEST_COMMAND });
+    const site = createSiteRepo({ testCommand: TEST_COMMAND, maxAttempts: 1 });
     const { tracker, spec, ticket } = oneTicketSpec();
     const agentCli = new FakeAgentCli(
       ({ cwd }) => {
@@ -281,12 +282,13 @@ describe("factory loop with one Ticket", () => {
 
     expectNoPass(run.exitCode, tracker, ticket, /moved on/);
 
+    await tracker.comment(ticket, "Try again, please.");
     await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
     expect(agentCli.sessions).toHaveLength(2);
   });
 
   it("does not Pass a Ticket whose session failed", async () => {
-    const site = createSiteRepo({ testCommand: "true" });
+    const site = createSiteRepo({ testCommand: "true", maxAttempts: 1 });
     const { tracker, spec, ticket } = oneTicketSpec();
     const agentCli = new FakeAgentCli(({ cwd }) => {
       commitFile(cwd, "index.html", "<h1>hello</h1>\n");
@@ -309,7 +311,7 @@ describe("factory loop with two Tickets", () => {
   }
 
   it("brings a Ticket that did not pass up to what a sibling Passed since, so it can Pass on a later run", async () => {
-    const site = createSiteRepo({ testCommand: "test ! -f broken.txt" });
+    const site = createSiteRepo({ testCommand: "test ! -f broken.txt", maxAttempts: 1 });
     const { tracker, spec, first, second } = twoTicketSpec();
     let sawSibling = false;
     const agentCli = new FakeAgentCli(
@@ -332,6 +334,7 @@ describe("factory loop with two Tickets", () => {
     expect(run.exitCode).not.toBe(0);
     expect(tracker.issue(second).state).toBe("closed");
 
+    await tracker.comment(first, "Try again, please.");
     const rerun = await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
 
     expect(rerun.exitCode, rerun.stderr).toBe(0);
@@ -342,7 +345,7 @@ describe("factory loop with two Tickets", () => {
   });
 
   it("does not Pass a Ticket with no commit of its own on the catch-up with what a sibling Passed", async () => {
-    const site = createSiteRepo({ testCommand: "true" });
+    const site = createSiteRepo({ testCommand: "true", maxAttempts: 1 });
     git(site, "config", "merge.ff", "false");
     const { tracker, spec, first, second } = twoTicketSpec();
     const agentCli = new FakeAgentCli(
@@ -357,6 +360,7 @@ describe("factory loop with two Tickets", () => {
     expect(tracker.issue(second).state).toBe("closed");
     const integrationBefore = git(site, "rev-parse", `spec/${spec}`);
 
+    await tracker.comment(first, "Try again, please.");
     const rerun = await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
 
     expectNoPass(rerun.exitCode, tracker, first, /no commit/);
@@ -365,7 +369,7 @@ describe("factory loop with two Tickets", () => {
   });
 
   it("tells the session to resolve the conflicts when what a sibling Passed does not merge cleanly", async () => {
-    const site = createSiteRepo({ testCommand: "grep -q both index.html" });
+    const site = createSiteRepo({ testCommand: "grep -q both index.html", maxAttempts: 1 });
     const { tracker, spec, first, second } = twoTicketSpec();
     let catchUpPrompt = "";
     const agentCli = new FakeAgentCli(
@@ -386,6 +390,7 @@ describe("factory loop with two Tickets", () => {
     await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
     expect(tracker.issue(second).state).toBe("closed");
 
+    await tracker.comment(first, "Try again, please.");
     const rerun = await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
 
     expect(catchUpPrompt).toMatch(/conflicts/);

@@ -1,14 +1,15 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
-import type { AgentCli, SessionResult } from "./agent-cli.ts";
 import type { SiteConfig } from "./config.ts";
-import { runGate, type GateResult } from "./gate.ts";
+import { runGate } from "./gate.ts";
 import { branchExists, git, gitSucceeds, worktreeOf } from "./git.ts";
+import { recordTicketState, type TicketState } from "./loop-state.ts";
 import { stageLabel } from "./stages.ts";
+import type { AgentCli } from "./agent-cli.ts";
 import type { Issue, IssueEvent, Tracker } from "./tracker.ts";
 
-/** Local, uncommitted Factory state in the Site repository: worktrees for now. */
+/** Local, uncommitted Factory state in the Site repository: worktrees and the loop's state per Spec. */
 const LOCAL_DIR = ".factory";
 
 export interface LoopOptions {
@@ -22,8 +23,12 @@ export interface LoopOptions {
 
 export interface LoopResult {
   passed: number[];
+  /** Waiting for the Builder, with the reason on the Ticket. */
+  parked: number[];
   notPassed: number[];
 }
+
+type Outcome = "passed" | "parked" | "not-passed";
 
 /** A reason the loop cannot run at all, said in plain words. */
 export class LoopError extends Error {}
@@ -45,7 +50,7 @@ export async function runTicketLoop(options: LoopOptions): Promise<LoopResult> {
     .sort((a, b) => a.number - b.number);
   if (tickets.length === 0) {
     log(`Spec #${spec} has no open Tickets in the Build Stage, so there is nothing to build.`);
-    return { passed: [], notPassed: [] };
+    return { passed: [], parked: [], notPassed: [] };
   }
 
   await keepLocalStateOutOfGit(siteDir);
@@ -54,64 +59,160 @@ export async function runTicketLoop(options: LoopOptions): Promise<LoopResult> {
     await git(siteDir, "branch", integration, config.baseBranch);
   }
 
-  const result: LoopResult = { passed: [], notPassed: [] };
+  const result: LoopResult = { passed: [], parked: [], notPassed: [] };
   for (const ticket of tickets) {
-    const passed = await buildTicket(ticket, options);
-    (passed ? result.passed : result.notPassed).push(ticket.number);
+    const outcome = await buildTicket(ticket, options);
+    ({ passed: result.passed, parked: result.parked, "not-passed": result.notPassed })[outcome].push(ticket.number);
   }
   return result;
 }
 
-async function buildTicket(ticket: Issue, options: LoopOptions): Promise<boolean> {
-  const { siteDir, spec, config, agentCli, tracker, log } = options;
+async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome> {
+  const { siteDir, spec, config, agentCli, log } = options;
   const integration = integrationBranch(spec);
   const branch = ticketBranch(ticket.number);
 
   // A Pass that broke off is finished from the tracker and git, never from a local record alone:
   // anything that happened on the Ticket since, or a new commit on its branch, is rework.
-  const history = await tracker.historyOf(ticket.number);
+  const history = await options.tracker.historyOf(ticket.number);
   const tip = await refTarget(siteDir, `refs/heads/${branch}`);
   const announced = announcedPass(history);
   if (announced && announced === tip && (await gitSucceeds(siteDir, "merge-base", "--is-ancestor", announced, integration))) {
     log(`Ticket #${ticket.number}: its Pass was announced last run but the Ticket did not close, closing it`);
     await git(siteDir, "update-ref", "-d", passRef(ticket.number));
     await closeAsPass(ticket, options);
-    return true;
+    await record(options, ticket, { status: "passed", attempts: 0 });
+    return "passed";
   }
+
+  // A parked Ticket waits for the Builder: until something happens on it after the park comment.
+  const parkedFor = stillParked(history);
+  if (parkedFor !== undefined) {
+    log(`Ticket #${ticket.number}: parked, waiting for you. ${firstLine(parkedFor)}`);
+    return "parked";
+  }
+
+  const answer = answeredPark(history);
+  let previous: string | undefined;
   const tested = await refTarget(siteDir, passRef(ticket.number));
   if (tested) {
     if (tested === tip && !passCommits(history).includes(tested)) {
       log(`Ticket #${ticket.number}: its Pass broke off last run, finishing it`);
-      return finishPass(ticket, options, tested);
+      const refused = await finishPass(ticket, options, tested);
+      if (refused === undefined) {
+        await record(options, ticket, { status: "passed", attempts: 0 });
+        return "passed";
+      }
+      previous = `Your last attempt did not pass: ${refused}`;
     }
     await git(siteDir, "update-ref", "-d", passRef(ticket.number));
   }
 
+  // Every fix round works in the same worktree, so it sees what the attempt before left.
   const worktree = await openWorktree(siteDir, ticket.number, integration);
-  const catchUp = await catchUpWith(worktree, integration);
-  const base = await git(siteDir, "rev-parse", integration);
-  log(`Ticket #${ticket.number}: building on ${branch} in ${relative(siteDir, worktree)}`);
-
-  const session = await agentCli.runSession({
-    cwd: worktree,
-    prompt: buildPrompt(ticket, spec, config, catchUp),
-    sandbox: true,
-    timeoutMs: config.sessionTimeoutMs,
-  });
-  const gate = await judge(session, worktree, base, branch, integration, config.testCommand);
-
-  if (!gate.passed) {
-    log(`Ticket #${ticket.number}: not passed. ${firstLine(gate.reason)}`);
-    await tracker.comment(
-      ticket.number,
-      `Not passed yet. ${gate.reason}\n\nThe work so far stays on \`${branch}\` in \`${relative(siteDir, worktree)}\`.`,
+  let reason = "";
+  for (let attempt = 1; attempt <= config.maxAttempts; attempt++) {
+    const catchUp = await catchUpWith(worktree, integration);
+    const base = await git(siteDir, "rev-parse", integration);
+    log(
+      attempt === 1
+        ? `Ticket #${ticket.number}: building on ${branch} in ${relative(siteDir, worktree)}`
+        : `Ticket #${ticket.number}: fix round ${attempt - 1}, back to Build with the failing reason`,
     );
-    return false;
+    await record(options, ticket, { status: "building", attempts: attempt });
+
+    const session = await agentCli.runSession({
+      cwd: worktree,
+      prompt: buildPrompt(ticket, spec, config, [catchUp, answer, previous]),
+      sandbox: true,
+      timeoutMs: config.sessionTimeoutMs,
+    });
+
+    if (session.kind === "decision") {
+      return park(ticket, options, attempt, `The Build session needs a decision from you: ${session.question}`, [
+        "The Build session stopped because it needs a decision only you can make:",
+        "",
+        session.question,
+        "",
+        `Answer in a comment on this Ticket, then run the Ticket loop again. The work so far stays on \`${branch}\`.`,
+      ]);
+    }
+    if (session.kind === "rate-limited") {
+      // Hitting the plan's limit is not the Ticket's failure, so it neither counts as an attempt nor parks.
+      reason = `The Agent CLI hit its rate limit until ${session.until.toISOString()}.`;
+      log(`Ticket #${ticket.number}: not passed. ${reason}`);
+      await options.tracker.comment(ticket.number, `Not passed yet. ${reason}\n\nThe work so far stays on \`${branch}\`.`);
+      await record(options, ticket, { status: "not-passed", attempts: attempt, reason });
+      return "not-passed";
+    }
+
+    const gate =
+      session.kind === "failed"
+        ? { passed: false as const, reason: `The Build session failed: ${session.reason}` }
+        : await runGate(worktree, base, branch, integration, config.testCommand);
+    if (gate.passed) {
+      // Recorded before anything moves, so a run that dies before the Pass comment finishes it next time.
+      await git(siteDir, "update-ref", passRef(ticket.number), gate.head);
+      const refused = await finishPass(ticket, options, gate.head);
+      if (refused === undefined) {
+        await record(options, ticket, { status: "passed", attempts: attempt });
+        return "passed";
+      }
+      reason = refused;
+    } else {
+      reason = gate.reason;
+    }
+    log(`Ticket #${ticket.number}: not passed. ${firstLine(reason)}`);
+    previous = `Your last attempt did not pass: ${reason}\n\nFix exactly that.`;
   }
 
-  // Recorded before anything moves, so a run that dies before the Pass comment finishes it next time.
-  await git(siteDir, "update-ref", passRef(ticket.number), gate.head);
-  return finishPass(ticket, options, gate.head);
+  return park(ticket, options, config.maxAttempts, reason, [
+    `The Ticket loop tried this Ticket ${config.maxAttempts} times and it did not pass. The last reason:`,
+    "",
+    reason,
+    "",
+    `The work so far stays on \`${branch}\` in \`${relative(siteDir, worktree)}\`. ` +
+      "Say in a comment on this Ticket what should change, then run the Ticket loop again.",
+  ]);
+}
+
+/** Leaves the Ticket open in its Stage, says why on it, and marks it parked for the board. */
+async function park(ticket: Issue, options: LoopOptions, attempts: number, reason: string, comment: string[]): Promise<Outcome> {
+  options.log(`Ticket #${ticket.number}: parked. ${firstLine(reason)}`);
+  await options.tracker.comment(ticket.number, `${PARKED} ${comment.join("\n")}`);
+  await record(options, ticket, { status: "parked", attempts, reason });
+  return "parked";
+}
+
+async function record(options: LoopOptions, ticket: Issue, state: TicketState): Promise<void> {
+  await recordTicketState(join(options.siteDir, LOCAL_DIR), options.spec, ticket.number, state);
+}
+
+const PARKED = "Parked.";
+
+/** The park comment, when it is the last thing that happened on the Ticket. */
+function stillParked(history: IssueEvent[]): string | undefined {
+  const last = history.at(-1);
+  return last?.kind === "comment" && last.body.startsWith(PARKED) ? last.body.slice(PARKED.length).trim() : undefined;
+}
+
+/** What the session needs to know when the Builder answered a park: the park comment and everything said since. */
+function answeredPark(history: IssueEvent[]): string | undefined {
+  const at = history.findLastIndex((event) => event.kind === "comment" && event.body.startsWith(PARKED));
+  if (at === -1) return undefined;
+  const since = history.slice(at + 1).flatMap((event) => (event.kind === "comment" ? [event.body] : []));
+  // A Pass since the park settled it; what came after is not an answer to it.
+  if (since.length === 0 || since.some((body) => PASS_COMMENT.test(body))) return undefined;
+  const parked = history[at] as { body: string };
+  return [
+    "This Ticket was parked last time, with this on the Ticket:",
+    "",
+    parked.body,
+    "",
+    "The Builder answered since. Build exactly what the answer says:",
+    "",
+    ...since,
+  ].join("\n");
 }
 
 /** Where a green gate leaves the commit it tested until the Pass comment is posted. */
@@ -137,12 +238,12 @@ async function refTarget(siteDir: string, ref: string): Promise<string | undefin
 
 /**
  * The steps of a Pass after the gate: merge the tested commit, remove the worktree,
- * comment, close. A rerun repeats the merge and the worktree removal harmlessly.
+ * comment, close. Returns why it could not, when the integration branch moved on. A rerun repeats the merge and the worktree removal harmlessly.
  * Once the Pass comment is posted it is the record: the pass ref goes, and a rerun
  * that finds the comment last on the open Ticket only closes it.
  */
-async function finishPass(ticket: Issue, options: LoopOptions, head: string): Promise<boolean> {
-  const { siteDir, spec, tracker, log } = options;
+async function finishPass(ticket: Issue, options: LoopOptions, head: string): Promise<string | undefined> {
+  const { siteDir, spec, tracker } = options;
   const integration = integrationBranch(spec);
   const branch = ticketBranch(ticket.number);
 
@@ -151,14 +252,7 @@ async function finishPass(ticket: Issue, options: LoopOptions, head: string): Pr
     if (!(await gitSucceeds(siteDir, "merge-base", "--is-ancestor", tip, head))) {
       // Nothing a rerun of this Pass can fix, so the Ticket goes back to Build.
       await git(siteDir, "update-ref", "-d", passRef(ticket.number));
-      const worktree = await worktreeOf(siteDir, branch);
-      const reason = `\`${integration}\` moved on since the gate tested ${head.slice(0, 7)}, and \`${branch}\` does not build on it, so it cannot be fast-forwarded.`;
-      log(`Ticket #${ticket.number}: not passed. ${reason}`);
-      await tracker.comment(
-        ticket.number,
-        `Not passed yet. ${reason}\n\nThe work so far stays on \`${branch}\`${worktree ? ` in \`${relative(siteDir, worktree)}\`` : ""}.`,
-      );
-      return false;
+      return `\`${integration}\` moved on since the gate tested ${head.slice(0, 7)}, and \`${branch}\` does not build on it, so it cannot be fast-forwarded.`;
     }
     await fastForward(siteDir, integration, tip, head);
   }
@@ -171,7 +265,7 @@ async function finishPass(ticket: Issue, options: LoopOptions, head: string): Pr
   );
   await git(siteDir, "update-ref", "-d", passRef(ticket.number));
   await closeAsPass(ticket, options);
-  return true;
+  return undefined;
 }
 
 /** Closes the Ticket of an announced Pass. */
@@ -179,26 +273,6 @@ async function closeAsPass(ticket: Issue, options: LoopOptions): Promise<void> {
   const { spec, tracker, log } = options;
   await tracker.close(ticket.number);
   log(`Ticket #${ticket.number}: Pass, now in ${integrationBranch(spec)}`);
-}
-
-async function judge(
-  session: SessionResult,
-  worktree: string,
-  base: string,
-  branch: string,
-  integration: string,
-  testCommand: string,
-): Promise<GateResult> {
-  switch (session.kind) {
-    case "done":
-      return runGate(worktree, base, branch, integration, testCommand);
-    case "failed":
-      return { passed: false, reason: `The Build session failed: ${session.reason}` };
-    case "rate-limited":
-      return { passed: false, reason: `The Agent CLI hit its rate limit until ${session.until.toISOString()}.` };
-    case "decision":
-      return { passed: false, reason: `The Build session needs a decision: ${session.question}` };
-  }
 }
 
 /** One worktree per Ticket, on the Ticket's own branch, cut from the Spec's integration branch. */
@@ -253,9 +327,10 @@ async function keepLocalStateOutOfGit(siteDir: string): Promise<void> {
   await appendFile(exclude, `${current === "" || current.endsWith("\n") ? "" : "\n"}/${LOCAL_DIR}/\n`);
 }
 
-function buildPrompt(ticket: Issue, spec: number, config: SiteConfig, catchUp: string | undefined): string {
+/** The Ticket, preceded by what this attempt must handle first: a catch-up, the Builder's answer, the last failure. */
+function buildPrompt(ticket: Issue, spec: number, config: SiteConfig, first: (string | undefined)[]): string {
   return [
-    ...(catchUp ? [catchUp, ""] : []),
+    ...first.flatMap((note) => (note ? [note, ""] : [])),
     `You are building Ticket #${ticket.number} of Spec #${spec} in this Site's repository, unattended.`,
     "",
     `# ${ticket.title}`,

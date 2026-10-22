@@ -57,11 +57,14 @@ async function loop(spec: number, deps: FactoryDeps): Promise<number> {
       tracker: deps.tracker,
       log: (line) => deps.stdout(`${line}\n`),
     });
-    if (result.notPassed.length > 0) {
-      deps.stdout(`Not passed: ${result.notPassed.map((n) => `#${n}`).join(", ")}. The reason is on each Ticket.\n`);
-      return 1;
+    const list = (tickets: number[]) => tickets.map((n) => `#${n}`).join(", ");
+    if (result.parked.length > 0) {
+      deps.stdout(`Parked, waiting for you: ${list(result.parked)}. Each Ticket says why; answer there, then run the loop again.\n`);
     }
-    return 0;
+    if (result.notPassed.length > 0) {
+      deps.stdout(`Not passed: ${list(result.notPassed)}. The reason is on each Ticket.\n`);
+    }
+    return result.parked.length + result.notPassed.length > 0 ? 1 : 0;
   } catch (error) {
     if (error instanceof ConfigError || error instanceof LoopError) {
       deps.stderr(`${error.message}\n`);

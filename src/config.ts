@@ -8,6 +8,8 @@ export interface SiteConfig {
   /** The branch the Builder publishes from; the Ticket loop never moves it. */
   baseBranch: string;
   sessionTimeoutMs: number;
+  /** How many Build sessions a Ticket gets in one run before it parks. */
+  maxAttempts: number;
 }
 
 export const CONFIG_FILE = "factory.json";
@@ -27,12 +29,15 @@ export async function readSiteConfig(siteDir: string): Promise<SiteConfig> {
   } catch {
     throw new ConfigError(`${CONFIG_FILE} is not valid JSON.`);
   }
-  const { testCommand, baseBranch = "main", sessionTimeoutMs = 60 * 60 * 1000 } = parsed;
+  const { testCommand, baseBranch = "main", sessionTimeoutMs = 60 * 60 * 1000, maxAttempts = 3 } = parsed;
   if (typeof testCommand !== "string" || testCommand.trim() === "") {
     throw new ConfigError(`${CONFIG_FILE} has no testCommand, so the Ticket loop cannot tell whether a Ticket is green.`);
   }
   if (typeof baseBranch !== "string" || typeof sessionTimeoutMs !== "number") {
     throw new ConfigError(`${CONFIG_FILE} has a baseBranch or sessionTimeoutMs of the wrong type.`);
   }
-  return { testCommand, baseBranch, sessionTimeoutMs };
+  if (typeof maxAttempts !== "number" || !Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new ConfigError(`${CONFIG_FILE} has a maxAttempts that is not a whole number of at least 1.`);
+  }
+  return { testCommand, baseBranch, sessionTimeoutMs, maxAttempts };
 }
