@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { AGENT_CLIS, CONFIG_FILE, ConfigError, type AgentCliName } from "./config.ts";
 import { git } from "./git.ts";
+import { isFirebaseHosting } from "./host.ts";
 import type { Tracker } from "./tracker.ts";
 
 /** One stack or host the Builder was offered, with the case for and against it. */
@@ -26,7 +27,7 @@ export interface KickoffDecisions {
   location: { operatorCountry: string; visitorCountries: string[] };
   agentCli: AgentCliName;
   stack: Choice;
-  /** `setup` is the chosen host's own setup: required for a host other than Firebase. */
+  /** `setup` is the chosen host's own setup: required for a host other than Firebase Hosting. */
   host: Choice & { setup?: string };
   commands: { test: string; serve: string; build?: string };
 }
@@ -89,10 +90,6 @@ function choice(value: unknown, field: string): Choice {
   };
 }
 
-function isFirebase(host: string): boolean {
-  return /firebase/i.test(host);
-}
-
 /** Checks everything before anything is written, so a refusal changes nothing. */
 export function parseDecisions(raw: unknown): KickoffDecisions {
   const decisions = record(raw, "content");
@@ -101,7 +98,7 @@ export function parseDecisions(raw: unknown): KickoffDecisions {
   const commands = record(decisions.commands, "commands");
   const host = choice(decisions.host, "host");
   const setup = record(decisions.host, "host").setup;
-  if (!isFirebase(host.chosen)) text(setup, `setup of ${host.chosen} (host.setup): the Builder's next step, since the Factory connects only Firebase itself`);
+  if (!isFirebaseHosting(host.chosen)) text(setup, `setup of ${host.chosen} (host.setup): the Builder's next step, since the Factory connects only Firebase Hosting itself`);
   const { visitorCountries } = location;
   if (!Array.isArray(visitorCountries) || visitorCountries.length === 0) throw new KickoffError("The Kickoff decisions have no location.visitorCountries.");
   if (commands.build !== undefined) text(commands.build, "commands.build");
@@ -117,7 +114,7 @@ export function parseDecisions(raw: unknown): KickoffDecisions {
     },
     agentCli: agentCli(decisions.agentCli),
     stack: choice(decisions.stack, "stack"),
-    host: isFirebase(host.chosen) ? host : { ...host, setup: (setup as string).trim() },
+    host: isFirebaseHosting(host.chosen) ? host : { ...host, setup: (setup as string).trim() },
     commands: {
       test: text(commands.test, "commands.test"),
       serve: text(commands.serve, "commands.serve"),
@@ -135,7 +132,7 @@ function germanPack({ location }: KickoffDecisions): boolean {
 }
 
 function nextStep({ host }: KickoffDecisions): string {
-  return host.setup ?? "Connect Firebase to the Site's GitHub repository, so that pull requests get a Preview and merging publishes. The kickoff skill walks you through it.";
+  return host.setup ?? "Connect Firebase Hosting to the Site's GitHub repository, so that pull requests get a Preview and merging publishes. The kickoff skill walks you through it.";
 }
 
 function adr(title: string, decisions: KickoffDecisions, decision: Choice, consequence?: string): string {

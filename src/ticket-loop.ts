@@ -12,7 +12,7 @@ import { ServeError, withServedBuild } from "./served-build.ts";
 import { stageLabel } from "./stages.ts";
 import type { AgentCli } from "./agent-cli.ts";
 import type { Clock } from "./clock.ts";
-import type { Host } from "./host.ts";
+import { HostError, type Host } from "./host.ts";
 import type { Issue, IssueEvent, PullRequest, Tracker } from "./tracker.ts";
 
 /** Local, uncommitted Factory state in the Site repository: worktrees and the loop's state per Spec. */
@@ -45,7 +45,7 @@ export interface LoopResult {
 }
 
 export interface SpecPullRequest extends PullRequest {
-  /** The Preview URL from the host, or undefined when the pull request was already open from an earlier run. */
+  /** The Preview URL from the host, or undefined when the pull request was already open from an earlier run and names it. */
   preview?: string;
   opened: boolean;
 }
@@ -177,8 +177,8 @@ async function whyBlocked(
 
 /**
  * Pushes the Spec's integration branch, and only it, and opens one pull request
- * against the base branch with the host's Preview URL. A rerun pushes again and
- * finds the open pull request instead of opening a second one.
+ * against the base branch with the host's Preview URL. A rerun pushes again, renews
+ * the Preview and finds the open pull request instead of opening a second one.
  */
 async function openSpecPullRequest(options: LoopOptions): Promise<SpecPullRequest | undefined> {
   const { siteDir, spec, config, tracker, host, log } = options;
@@ -202,10 +202,12 @@ async function openSpecPullRequest(options: LoopOptions): Promise<SpecPullReques
 
   const existing = await tracker.pullRequestFrom(integration);
   if (existing) {
-    log(`Spec #${spec}: pushed ${integration}, which updates its pull request #${existing.number}`);
+    // The pull request names the branch's Preview: it must show what was just pushed.
+    await deployPreview(options);
+    log(`Spec #${spec}: pushed ${integration}, which updates its pull request #${existing.number} and its Preview`);
     return { ...existing, opened: false };
   }
-  const preview = await host.deployPreview({ siteDir, branch: integration });
+  const preview = await deployPreview(options);
   const specIssue = await tracker.getIssue(spec);
   const tickets = (await tracker.ticketsOf(spec)).sort((a, b) => a.number - b.number);
   const pullRequest = await tracker.openPullRequest({
@@ -225,6 +227,15 @@ async function openSpecPullRequest(options: LoopOptions): Promise<SpecPullReques
   });
   log(`Spec #${spec}: opened pull request #${pullRequest.number} with the Preview ${preview}`);
   return { ...pullRequest, preview, opened: true };
+}
+
+async function deployPreview({ siteDir, spec, host }: LoopOptions): Promise<string> {
+  try {
+    return await host.deployPreview({ siteDir, branch: integrationBranch(spec) });
+  } catch (error) {
+    if (error instanceof HostError) throw new LoopError(`Every Ticket of Spec #${spec} passed, but its Preview could not be deployed: ${error.message}`);
+    throw error;
+  }
 }
 
 async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome> {

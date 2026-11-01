@@ -2,12 +2,13 @@ import type { AgentCli } from "./agent-cli.ts";
 import { systemClock, type Clock } from "./clock.ts";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
-import { CONFIG_FILE, ConfigError, readSiteConfig } from "./config.ts";
+import { CONFIG_FILE, ConfigError, readSiteConfig, type SiteConfig } from "./config.ts";
 import { couldNotRun, formatReport } from "./review/report.ts";
 import { REVIEW_CHECKS, runReview } from "./review/review.ts";
+import { currentBranch } from "./git.ts";
 import { KickoffError, runKickoff } from "./kickoff.ts";
 import { LoopError, runTicketLoop, type ReviewSite } from "./ticket-loop.ts";
-import type { Host } from "./host.ts";
+import { HostError, type Host } from "./host.ts";
 import type { Tracker } from "./tracker.ts";
 
 export interface FactoryDeps {
@@ -16,7 +17,7 @@ export interface FactoryDeps {
   agentCli?: AgentCli;
   /** The Site's issues on GitHub (the GitHub tracker), or a fake in tests. */
   tracker?: Tracker;
-  /** Missing until the Builder's host adapter exists. */
+  /** The adapter for the host in the Site's `factory.json`; missing when the Factory has none for it. */
   host?: Host;
   /** The real clock unless a test fakes it. */
   clock?: Clock;
@@ -31,6 +32,10 @@ export const USAGE = `Usage:
                                   Record the Builder's Kickoff decisions, written down by
                                   the kickoff skill: ADRs, the Stack section in AGENTS.md,
                                   factory.json, and the Stage labels on GitHub
+  factory connect-host            Finish connecting the Site's host during Kickoff,
+                                  after the kickoff skill's steps on the host's side
+  factory publish                 Publish the Site live; merging into the base branch
+                                  runs this on GitHub
   factory loop <spec>             Build the open Tickets of Spec number <spec>, unattended
   factory review <url> [--json] [--check <id>]
                                   Run every Review check on the Site served at <url>,
@@ -63,6 +68,8 @@ export async function factory(argv: string[], deps: FactoryDeps): Promise<number
   }
   if (command === "review") return review(args, deps);
   if (command === "kickoff") return kickoff(args, deps);
+  if (command === "connect-host") return connectHost(deps);
+  if (command === "publish") return publish(deps);
   if (command !== "loop") {
     deps.stderr(`factory does not know the command "${command}".\n\n${USAGE}`);
     return 2;
@@ -96,6 +103,44 @@ async function kickoff(args: string[], deps: FactoryDeps): Promise<number> {
     }
     throw error;
   }
+}
+
+const NO_HOST = "The Factory has no adapter for this Site's host, so it cannot do this. Follow the host's own setup in the Stack section of AGENTS.md.\n";
+
+/** Runs a host step, printing why it stopped when it stopped for a reason the Builder can read. */
+async function hostStep(deps: FactoryDeps, step: (host: Host, config: SiteConfig) => Promise<void>): Promise<number> {
+  try {
+    const config = await readSiteConfig(deps.cwd);
+    if (!deps.host) {
+      deps.stderr(NO_HOST);
+      return 1;
+    }
+    await step(deps.host, config);
+    return 0;
+  } catch (error) {
+    if (error instanceof ConfigError || error instanceof HostError) {
+      deps.stderr(`${error.message}\n`);
+      return 1;
+    }
+    throw error;
+  }
+}
+
+function connectHost(deps: FactoryDeps): Promise<number> {
+  return hostStep(deps, async (host, { baseBranch }) => {
+    await host.connect({ siteDir: deps.cwd, baseBranch });
+    deps.stdout(`The host is connected: merging into ${baseBranch} publishes the Site. Commit the changes and push them.\n`);
+  });
+}
+
+function publish(deps: FactoryDeps): Promise<number> {
+  return hostStep(deps, async (host, { baseBranch }) => {
+    const branch = await currentBranch(deps.cwd);
+    if (branch !== baseBranch) {
+      throw new HostError(`Only ${baseBranch} is published, and this is ${branch}: nothing reaches the live Site without the Builder's Approve.`);
+    }
+    deps.stdout(`Published: ${await host.publishLive({ siteDir: deps.cwd })}\n`);
+  });
 }
 
 async function loop(spec: number, deps: FactoryDeps): Promise<number> {

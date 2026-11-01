@@ -28,8 +28,9 @@ Offer at least two stacks and at least two hosts that fit the answers. For each 
 
 - Follow the Modern Web Guidance skill when you weigh stacks.
 - Firebase is the recommended default host: Firebase Hosting for static output, Firebase App Hosting when the Site needs a server. Recommend something else when the answers call for it.
+- Firebase App Hosting has no preview channels, so the Factory connects only Firebase Hosting itself. A Builder who needs a server gets App Hosting as another host: say so, and that they must find their own way to a Preview.
 - Offer only hosts that give a Preview URL for a pull request. Approve needs something for the Builder to read.
-- If the Builder chooses a host other than Firebase, tell them the Factory has no adapter for it yet. Find out that host's own setup, and keep it as the text for `host.setup`: what the Builder has to do next, in plain words, with no line starting with `## `.
+- If the Builder chooses a host other than Firebase Hosting, tell them the Factory has no adapter for it yet. Find out that host's own setup, and keep it as the text for `host.setup`: what the Builder has to do next, in plain words, with no line starting with `## `.
 
 ## 4. Set up the stack
 
@@ -47,7 +48,7 @@ Stage labels live on GitHub, so this is the moment a login is first needed. Say 
 
 ## 6. Record the decisions
 
-Write the decisions to `.factory/kickoff.json`, in English, in this shape. Include every option you offered, also the ones not chosen. Leave out `commands.build` when there is no build step and `host.setup` for Firebase.
+Write the decisions to `.factory/kickoff.json`, in English, in this shape. Include every option you offered, also the ones not chosen. Leave out `commands.build` when there is no build step and `host.setup` for Firebase Hosting.
 
 ```json
 {
@@ -91,10 +92,15 @@ Tell the Builder in plain words what was recorded, and pass on what the command 
 
 The command prints it. For another host, it is that host's own setup: walk the Builder through it one step at a time.
 
-For Firebase, connect hosting to GitHub, so that pull requests get a Preview and merging publishes without the Builder creating any secret by hand. Go one step at a time, waiting for each to work:
+For Firebase Hosting, connect hosting to GitHub, so that pull requests get a Preview and merging publishes without the Builder creating any secret by hand. Go one step at a time, waiting for each to work:
 
-1. The Builder logs in with `npx firebase-tools login` in their own terminal, because it opens a browser.
-2. They run `npx firebase-tools init hosting:github` in their own terminal, because it asks questions. Tell them what to answer as each question comes.
-3. Commit what it wrote and run `git push`.
+1. The Builder logs in with `npx firebase-tools login` in their own terminal, because it opens a browser. The Ticket loop deploys each Preview with this login.
+2. They run `npx firebase-tools init hosting` in their own terminal, because it asks questions. Tell them what to answer as each question comes:
+   - The public directory is the folder the Site's build command writes to, or the folder holding the pages when there is no build step.
+   - Say yes to setting up automatic builds and deploys with GitHub. Firebase then stores a key on GitHub by itself.
+   - Say yes to a build script when the Site has a build command, and answer with `npm ci` followed by that command.
+   - Say **no** to automatic deployment when a pull request is merged: the Factory's own Publish does that in the next step.
+3. Run `npx factory connect-host`. It writes the workflow that publishes on every merge into the base branch. If it refuses, it says why: fix that and run it again.
+4. Commit what these steps wrote and run `git push`.
 
 Then tell the Builder that Kickoff is finished and that their next step is their first Request.

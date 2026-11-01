@@ -1,5 +1,6 @@
 import { factory } from "../../src/cli.ts";
 import type { AgentCli } from "../../src/agent-cli.ts";
+import type { Host } from "../../src/host.ts";
 import type { ReviewSite } from "../../src/ticket-loop.ts";
 import type { Tracker } from "../../src/tracker.ts";
 import { FakeClock } from "./fake-clock.ts";
@@ -17,7 +18,7 @@ export interface FactoryRun {
 /** Runs the real `factory` command in a directory, capturing what it prints, with its boundaries faked. */
 export async function runFactory(
   argv: string[],
-  options: { cwd: string; agentCli?: AgentCli; tracker?: Tracker; clock?: FakeClock; host?: FakeHost; reviewSite?: ReviewSite },
+  options: { cwd: string; agentCli?: AgentCli; tracker?: Tracker; clock?: FakeClock; host?: Host; reviewSite?: ReviewSite },
 ): Promise<FactoryRun> {
   let stdout = "";
   let stderr = "";

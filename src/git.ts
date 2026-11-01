@@ -22,6 +22,11 @@ export async function branchExists(cwd: string, branch: string): Promise<boolean
   return gitSucceeds(cwd, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`);
 }
 
+/** The branch checked out in `cwd`; empty on a detached HEAD. */
+export function currentBranch(cwd: string): Promise<string> {
+  return git(cwd, "branch", "--show-current");
+}
+
 /** The worktree that has the branch checked out, if any. */
 export async function worktreeOf(cwd: string, branch: string): Promise<string | undefined> {
   const list = await git(cwd, "worktree", "list", "--porcelain");

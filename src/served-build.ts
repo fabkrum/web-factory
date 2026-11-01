@@ -22,7 +22,7 @@ export class ServeError extends Error {}
  * would measure that instead of the Ticket's build.
  */
 export async function withServedBuild<T>(worktree: string, config: SiteConfig, use: (url: URL) => Promise<T>): Promise<T> {
-  if (config.buildCommand) await build(worktree, config.buildCommand);
+  if (config.buildCommand) await buildSite(worktree, config.buildCommand);
   const port = await freePort();
   const command = config.serveCommand!.replaceAll("{port}", String(port));
   const child = spawn("sh", ["-c", command], {
@@ -60,7 +60,8 @@ export async function withServedBuild<T>(worktree: string, config: SiteConfig, u
   }
 }
 
-async function build(worktree: string, command: string): Promise<void> {
+/** Runs the Site's build command in `worktree`, or stops with why it failed. */
+export async function buildSite(worktree: string, command: string): Promise<void> {
   const run = await runShell(worktree, command, BUILD_TIMEOUT_MS);
   if (run.timedOut) {
     throw new ServeError(`The Site's build command \`${command}\` did not finish within ${BUILD_TIMEOUT_MS / 60_000} minutes, so it was stopped.${printed(run.output)}`);

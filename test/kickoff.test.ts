@@ -266,6 +266,17 @@ describe("factory kickoff", () => {
     expect(git(site, "rev-parse", "HEAD")).toBe(commit);
   });
 
+  it("counts Firebase App Hosting as another host: it has no preview channels", async () => {
+    const site = newSite();
+    const appHosting = { name: "Firebase App Hosting", for: "Runs a server", against: "No preview channels" };
+    const host = { ...decisions().host, chosen: "Firebase App Hosting", options: [...decisions().host.options, appHosting] };
+
+    const run = await kickoff(site, decisions({ host }));
+
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr).toMatch(/setup/);
+  });
+
   it.each([
     ["a line break", "Connect it in the dashboard.\n"],
     ["a space", "Connect it in the dashboard. "],

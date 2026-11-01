@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Session } from "../src/agent-cli.ts";
+import { HostError } from "../src/host.ts";
 import { FakeAgentCli } from "./harness/fake-agent-cli.ts";
 import { FakeHost } from "./harness/fake-host.ts";
 import { FakeTracker } from "./harness/fake-tracker.ts";
@@ -144,7 +145,32 @@ describe("the finished Spec", () => {
 
     expect(rerun.exitCode, rerun.stderr).toBe(0);
     expect(tracker.pullRequests).toHaveLength(1);
+    expect(host.previews.map((p) => p.url)).toEqual([host.previews[0]?.url, host.previews[0]?.url]);
     expect(originBranch(site, "main")).toBe(mainBefore);
+  });
+
+  it("stops with the host's reason when the Preview cannot be deployed, and a later run opens the pull request", async () => {
+    const site = createSiteRepo({ testCommand: "true" });
+    const tracker = new FakeTracker();
+    const spec = tracker.addSpec("A small Site");
+    tracker.addTicket(spec, "Home page");
+    const host = new FakeHost();
+    const deploy = host.deployPreview.bind(host);
+    host.deployPreview = async () => {
+      throw new HostError("Firebase refused the deploy.");
+    };
+
+    const run = await runFactory(["loop", String(spec)], { cwd: site, agentCli: new FakeAgentCli(buildsPage), tracker, host });
+
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr).toMatch(/Firebase refused the deploy/);
+    expect(tracker.pullRequests).toEqual([]);
+
+    host.deployPreview = deploy;
+    const rerun = await runFactory(["loop", String(spec)], { cwd: site, agentCli: new FakeAgentCli(), tracker, host });
+
+    expect(rerun.exitCode, rerun.stderr).toBe(0);
+    expect(tracker.pullRequests).toHaveLength(1);
   });
 
   it("opens the pull request on a later run when the run that finished the last Ticket could not push", async () => {

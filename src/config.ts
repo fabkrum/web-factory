@@ -85,3 +85,13 @@ export async function readAgentCliChoice(siteDir: string): Promise<AgentCliName>
   if (typeof choice === "string" && (AGENT_CLIS as readonly string[]).includes(choice)) return choice as AgentCliName;
   throw new ConfigError(`${CONFIG_FILE} names the Agent CLI ${JSON.stringify(choice)}, but the Factory supports only ${AGENT_CLIS.slice(0, -1).join(", ")} and ${AGENT_CLIS.at(-1)}.`);
 }
+
+/** The host the Site chose at Kickoff, from `host` in `factory.json`; undefined before Kickoff. */
+export async function readHostChoice(siteDir: string): Promise<string | undefined> {
+  try {
+    const { host } = JSON.parse(await readFile(join(siteDir, CONFIG_FILE), "utf8")) as { host?: unknown };
+    return typeof host === "string" ? host : undefined;
+  } catch {
+    return undefined;
+  }
+}
