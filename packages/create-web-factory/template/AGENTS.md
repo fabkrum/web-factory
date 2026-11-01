@@ -26,4 +26,4 @@ Modern Web Guidance is the skill in `.agents/skills/modern-web-guidance`. It is 
 
 ## Stack
 
-Not decided yet. Kickoff records the Site's Architecture decisions here.
+Not decided yet. Before the first Request, follow the `kickoff` skill in `.agents/skills/kickoff`: it records the Site's Architecture decisions here.

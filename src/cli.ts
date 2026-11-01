@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { CONFIG_FILE, ConfigError, readSiteConfig } from "./config.ts";
 import { couldNotRun, formatReport } from "./review/report.ts";
 import { REVIEW_CHECKS, runReview } from "./review/review.ts";
+import { KickoffError, runKickoff } from "./kickoff.ts";
 import { LoopError, runTicketLoop, type ReviewSite } from "./ticket-loop.ts";
 import type { Host } from "./host.ts";
 import type { Tracker } from "./tracker.ts";
@@ -26,6 +27,10 @@ export interface FactoryDeps {
 }
 
 export const USAGE = `Usage:
+  factory kickoff <decisions-file>
+                                  Record the Builder's Kickoff decisions, written down by
+                                  the kickoff skill: ADRs, the Stack section in AGENTS.md,
+                                  factory.json, and the Stage labels on GitHub
   factory loop <spec>             Build the open Tickets of Spec number <spec>, unattended
   factory review <url> [--json] [--check <id>]
                                   Run every Review check on the Site served at <url>,
@@ -57,6 +62,7 @@ export async function factory(argv: string[], deps: FactoryDeps): Promise<number
     return 0;
   }
   if (command === "review") return review(args, deps);
+  if (command === "kickoff") return kickoff(args, deps);
   if (command !== "loop") {
     deps.stderr(`factory does not know the command "${command}".\n\n${USAGE}`);
     return 2;
@@ -68,6 +74,28 @@ export async function factory(argv: string[], deps: FactoryDeps): Promise<number
     return 2;
   }
   return loop(spec, deps);
+}
+
+async function kickoff(args: string[], deps: FactoryDeps): Promise<number> {
+  const [file] = args;
+  if (file === undefined || args.length !== 1) {
+    deps.stderr(`factory kickoff needs the file with the Builder's decisions: factory kickoff <decisions-file>\n\n${USAGE}`);
+    return 2;
+  }
+  if (!deps.tracker) {
+    deps.stderr("This version of the Factory cannot reach GitHub, so factory kickoff cannot run.\n");
+    return 1;
+  }
+  try {
+    await runKickoff({ siteDir: deps.cwd, file, tracker: deps.tracker, stdout: deps.stdout });
+    return 0;
+  } catch (error) {
+    if (error instanceof ConfigError || error instanceof KickoffError) {
+      deps.stderr(`${error.message}\n`);
+      return 1;
+    }
+    throw error;
+  }
 }
 
 async function loop(spec: number, deps: FactoryDeps): Promise<number> {

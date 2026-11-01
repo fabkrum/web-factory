@@ -14,6 +14,10 @@ npm create web-factory@latest my-site
 
 This creates a Site repository in `my-site`: the Factory pinned as a dependency with its `factory` command, one AGENTS.md, the shared skills folder `.agents/skills`, and Modern Web Guidance vendored there at a pinned version with its licence and notice. Claude Code reaches the same instructions and skills through a CLAUDE.md that imports AGENTS.md and the link `.claude/skills`; Gemini CLI through `.gemini/settings.json`. Running the command again adds only what is missing, so it finishes a run that was cut short and changes nothing in a finished Site.
 
+## Kickoff
+
+Before the first Request, the `kickoff` skill in the Site's `.agents/skills` guides the Builder: who the Site is for, what it must do, how often its content changes, where its operator and Visitors are, and which Agent CLI they use (there is no default). It recommends a stack and a host with the case for and against each option, the Builder decides, and it sets up the chosen stack. It then writes the decisions to a file and runs `factory kickoff <decisions-file>`, which records them and commits: `docs/adr/0001-stack.md` and `docs/adr/0002-host.md` with every option offered, the Stack section in AGENTS.md, and `agentCli`, `host`, `testCommand`, `buildCommand`, `serveCommand` and `localePack` in `factory.json`. An operator or Visitors in Germany switch the German Locale pack on. Last it creates the Stage labels on GitHub. If GitHub cannot be reached the record stays, and running the same command again finishes it; once recorded, different decisions are refused, because a change to the architecture is a new Architecture decision in a Spec. Firebase is the only host the Factory connects itself; for any other host the decisions must carry that host's own setup (`host.setup`), which is recorded and shown as the Builder's next step.
+
 ## Development
 
 The Factory package is `@fabkrum/web-factory`, with the command `factory`. It is written in TypeScript for Node 22.19 or later.
