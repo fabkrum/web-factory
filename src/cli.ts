@@ -2,7 +2,7 @@ import type { AgentCli } from "./agent-cli.ts";
 import { systemClock, type Clock } from "./clock.ts";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
-import { CONFIG_FILE, ConfigError, readSiteConfig } from "./config.ts";
+import { CONFIG_FILE, ConfigError, readLocalePack, readSiteConfig } from "./config.ts";
 import { ReviewError } from "./review/check.ts";
 import { formatReport } from "./review/report.ts";
 import { REVIEW_CHECKS, runReview } from "./review/review.ts";
@@ -35,6 +35,8 @@ factory review checks every route its Site links to; a route is the URL's path
 without query string and without a trailing slash (the root stays /). Run from a
 Site's folder (where its factory.json is), it also runs the Site's own tests and
 checks its dependencies for known advisories; anywhere else those two are not run.
+The checks named legal/ are the German Locale pack: they run only on a Site whose
+factory.json says "localePack": "de". None of the Review is legal advice.
 Review checks: ${REVIEW_CHECKS.map((check) => check.id).join(", ")}.
 
 Exit codes of factory review: 0 the Site Passes, 1 it did not pass, 2 wrong usage,
@@ -138,7 +140,15 @@ async function review(args: string[], deps: FactoryDeps): Promise<number> {
   }
   try {
     const repo = await access(join(deps.cwd, CONFIG_FILE)).then(() => deps.cwd, () => undefined);
-    const report = await runReview(url, checks, repo);
+    const localePack = repo ? await readLocalePack(repo) : undefined;
+    const off = named.filter((id) => checks.some((check) => check.id === id && check.localePack && check.localePack !== localePack));
+    if (off.length > 0) {
+      deps.stderr(
+        `${off.join(", ")} ${off.length === 1 ? "belongs" : "belong"} to the German Locale pack, which is off here. It runs from a Site's folder whose factory.json says "localePack": "de".\n`,
+      );
+      return 2;
+    }
+    const report = await runReview(url, checks, repo, localePack);
     deps.stdout(json ? `${JSON.stringify(report, null, 2)}\n` : formatReport(report));
     return report.passed ? 0 : 1;
   } catch (error) {
@@ -149,7 +159,7 @@ async function review(args: string[], deps: FactoryDeps): Promise<number> {
 
 /** One plain-language reason the review could not run, with no stack trace. */
 function couldNotRun(error: unknown): string {
-  if (error instanceof ReviewError) return error.message;
+  if (error instanceof ReviewError || error instanceof ConfigError) return error.message;
   const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0];
   return `The review stopped before it could check your whole Site (${detail}). Check that your Site is still being served, then run the review again.`;
 }

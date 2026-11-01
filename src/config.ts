@@ -42,6 +42,28 @@ export async function readSiteConfig(siteDir: string): Promise<SiteConfig> {
   return { testCommand, baseBranch, sessionTimeoutMs, maxAttempts };
 }
 
+/** The Locale packs the Factory has, as a Site names them in `factory.json`: "de" is the German one. */
+export const LOCALE_PACKS = ["de"] as const;
+export type LocalePack = (typeof LOCALE_PACKS)[number];
+
+/**
+ * The Locale pack switched on for the Site, from `localePack` in `factory.json`;
+ * none when the Site names none. A `factory.json` that cannot be read has no
+ * pack: the Site's own tests check fails on it and says why.
+ */
+export async function readLocalePack(siteDir: string): Promise<LocalePack | undefined> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(join(siteDir, CONFIG_FILE), "utf8"));
+  } catch {
+    return undefined;
+  }
+  const pack = (parsed as { localePack?: unknown } | null)?.localePack;
+  if (pack === undefined) return undefined;
+  if (typeof pack === "string" && (LOCALE_PACKS as readonly string[]).includes(pack)) return pack as LocalePack;
+  throw new ConfigError(`${CONFIG_FILE} names the Locale pack ${JSON.stringify(pack)}, but the Factory has only the German one, "de".`);
+}
+
 /** The Agent CLIs the Factory has an adapter for, as a Site names them in `factory.json`. */
 export const AGENT_CLIS = ["claude-code", "codex", "antigravity", "gemini"] as const;
 export type AgentCliName = (typeof AGENT_CLIS)[number];

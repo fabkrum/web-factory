@@ -6,9 +6,10 @@ const SHOWN_PER_CHECK = 10;
 /** The review as the Builder reads it in the terminal, grouped by Review area. */
 export function formatReport(report: ReviewReport): string {
   const lines = [`Review of ${report.url}`, `Routes checked: ${report.routes.join(", ")}`, ""];
-  for (const { area, checks } of report.areas) {
+  for (const { area, checks, note } of report.areas) {
     lines.push(area);
-    if (checks.length === 0) lines.push("  No Review checks in this area yet.");
+    if (note) lines.push(`  ${note}`);
+    else if (checks.length === 0) lines.push("  No Review checks in this area yet.");
     for (const check of checks) {
       if (check.skipped) {
         lines.push(`  NOT RUN  ${check.name}`, indent(check.skipped));

@@ -1,0 +1,4 @@
+{
+  "testCommand": "node -e \"console.log('3 tests passed')\"",
+  "localePack": "de"
+}
