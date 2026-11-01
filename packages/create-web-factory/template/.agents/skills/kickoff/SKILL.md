@@ -29,7 +29,7 @@ Offer at least two stacks and at least two hosts that fit the answers. For each 
 - Follow the Modern Web Guidance skill when you weigh stacks.
 - Firebase is the recommended default host: Firebase Hosting for static output, Firebase App Hosting when the Site needs a server. Recommend something else when the answers call for it.
 - Offer only hosts that give a Preview URL for a pull request. Approve needs something for the Builder to read.
-- If the Builder chooses a host other than Firebase, tell them the Factory has no adapter for it yet. Find out that host's own setup, and keep it as the text for `host.setup`: what the Builder has to do next, in plain words.
+- If the Builder chooses a host other than Firebase, tell them the Factory has no adapter for it yet. Find out that host's own setup, and keep it as the text for `host.setup`: what the Builder has to do next, in plain words, with no line starting with `## `.
 
 ## 4. Set up the stack
 

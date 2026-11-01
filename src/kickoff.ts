@@ -38,6 +38,7 @@ const AGENTS_FILE = "AGENTS.md";
 const STACK_ADR = "docs/adr/0001-stack.md";
 const HOST_ADR = "docs/adr/0002-host.md";
 const NOTHING_DECIDED = "Not decided yet";
+const SECTION_HEADING = /^## /m;
 
 const LOCALE_PACK_ON = "The German Locale pack is on: Review checks the Impressum, the privacy policy, price display, and fonts and third-party requests before consent. It catches common mistakes and is not legal advice.";
 const LOCALE_PACK_OFF = "No Locale pack is on: Review runs only the generic checks, which check no country's law. This is not legal advice.";
@@ -104,7 +105,7 @@ export function parseDecisions(raw: unknown): KickoffDecisions {
   const { visitorCountries } = location;
   if (!Array.isArray(visitorCountries) || visitorCountries.length === 0) throw new KickoffError("The Kickoff decisions have no location.visitorCountries.");
   if (commands.build !== undefined) text(commands.build, "commands.build");
-  return {
+  const parsed: KickoffDecisions = {
     site: {
       audience: text(site.audience, "site.audience"),
       purpose: text(site.purpose, "site.purpose"),
@@ -116,13 +117,17 @@ export function parseDecisions(raw: unknown): KickoffDecisions {
     },
     agentCli: agentCli(decisions.agentCli),
     stack: choice(decisions.stack, "stack"),
-    host: isFirebase(host.chosen) ? host : { ...host, setup: setup as string },
+    host: isFirebase(host.chosen) ? host : { ...host, setup: (setup as string).trim() },
     commands: {
       test: text(commands.test, "commands.test"),
       serve: text(commands.serve, "commands.serve"),
       build: commands.build as string | undefined,
     },
   };
+  if (SECTION_HEADING.test(stackBody(parsed))) {
+    throw new KickoffError(`The Kickoff decisions hold a line starting with "## " in the text for the Stack section of ${AGENTS_FILE}, where it would start a new section. Write that text without it; host.setup is the likely place.`);
+  }
+  return parsed;
 }
 
 function germanPack({ location }: KickoffDecisions): boolean {
@@ -149,7 +154,7 @@ function adr(title: string, decisions: KickoffDecisions, decision: Choice, conse
   ].join("\n");
 }
 
-/** The body of the Stack section in AGENTS.md. */
+/** The body of the Stack section in AGENTS.md, exactly as `findStackSection` reads it back: `parseDecisions` keeps it so. */
 function stackBody(decisions: KickoffDecisions): string {
   const { stack, host, agentCli, commands } = decisions;
   return [
@@ -172,7 +177,7 @@ function findStackSection(agents: string): { start: number; end: number; body: s
   const heading = /^## Stack[ \t]*$/m.exec(agents);
   if (!heading) return undefined;
   const start = heading.index + heading[0].length;
-  const next = agents.slice(start).search(/^## /m);
+  const next = agents.slice(start).search(SECTION_HEADING);
   const end = next === -1 ? agents.length : start + next;
   return { start, end, body: agents.slice(start, end).trim() };
 }

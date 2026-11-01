@@ -219,6 +219,8 @@ describe("factory kickoff", () => {
     ["an option without its case against", { stack: { ...decisions().stack, options: [{ name: "Astro", for: "Fast", against: " " }, decisions().stack.options[1]] } }, /against/],
     ["no test command", { commands: { serve: "npx serve" } }, /commands\.test/],
     ["no serve command", { commands: { test: "npm test" } }, /commands\.serve/],
+    ["a setup with a heading line, which would split the Stack section", { host: { ...decisions().host, chosen: "Cloudflare Pages", setup: "Do this:\n## Dashboard\nConnect it." } }, /## /],
+    ["a command with a heading line, which would split the Stack section", { commands: { test: "npm test\n## Serve", serve: "npx serve" } }, /## /],
   ])("refuses %s and changes nothing", async (_, overrides, reason) => {
     const site = newSite();
 
@@ -262,6 +264,30 @@ describe("factory kickoff", () => {
     expect(second.exitCode, second.stderr).toBe(0);
     expect(await tracker.labels()).toEqual(expect.arrayContaining(STAGES.map(stageLabel)));
     expect(git(site, "rev-parse", "HEAD")).toBe(commit);
+  });
+
+  it.each([
+    ["a line break", "Connect it in the dashboard.\n"],
+    ["a space", "Connect it in the dashboard. "],
+  ])("finishes when run again with a host setup that ends in %s", async (_, setup) => {
+    const site = newSite();
+    const tracker = new FakeTracker();
+    const unreachable = {
+      ...delegateTo(tracker),
+      ensureStageLabels: async () => {
+        throw new Error("gh: not logged in");
+      },
+    };
+    const host = { ...decisions().host, chosen: "Cloudflare Pages", setup };
+
+    const failed = await kickoff(site, decisions({ host }), unreachable as unknown as FakeTracker);
+    expect(failed.exitCode).toBe(1);
+
+    const second = await kickoff(site, decisions({ host }), tracker);
+
+    expect(second.exitCode, second.stderr).toBe(0);
+    expect(await tracker.labels()).toEqual(expect.arrayContaining(STAGES.map(stageLabel)));
+    expect(second.stdout).toContain("Next step: Connect it in the dashboard.\n");
   });
 
   it("will not replace decisions already recorded: that is a new Architecture decision in a Spec", async () => {
