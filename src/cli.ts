@@ -3,10 +3,9 @@ import { systemClock, type Clock } from "./clock.ts";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { CONFIG_FILE, ConfigError, readSiteConfig } from "./config.ts";
-import { ReviewError } from "./review/check.ts";
-import { formatReport } from "./review/report.ts";
+import { couldNotRun, formatReport } from "./review/report.ts";
 import { REVIEW_CHECKS, runReview } from "./review/review.ts";
-import { LoopError, runTicketLoop } from "./ticket-loop.ts";
+import { LoopError, runTicketLoop, type ReviewSite } from "./ticket-loop.ts";
 import type { Host } from "./host.ts";
 import type { Tracker } from "./tracker.ts";
 
@@ -20,6 +19,8 @@ export interface FactoryDeps {
   host?: Host;
   /** The real clock unless a test fakes it. */
   clock?: Clock;
+  /** Runs the Review checks on a Ticket's served build: every one of them, unless a test says otherwise. */
+  reviewSite?: ReviewSite;
   stdout: (text: string) => void;
   stderr: (text: string) => void;
 }
@@ -84,6 +85,7 @@ async function loop(spec: number, deps: FactoryDeps): Promise<number> {
       tracker: deps.tracker,
       host: deps.host,
       clock: deps.clock ?? systemClock,
+      reviewSite: deps.reviewSite ?? ((url, repo) => runReview(url, REVIEW_CHECKS, repo)),
       log: (line) => deps.stdout(`${line}\n`),
     });
     const list = (tickets: number[]) => tickets.map((n) => `#${n}`).join(", ");
@@ -145,13 +147,6 @@ async function review(args: string[], deps: FactoryDeps): Promise<number> {
     deps.stderr(`${couldNotRun(error)}\n`);
     return COULD_NOT_RUN;
   }
-}
-
-/** One plain-language reason the review could not run, with no stack trace. */
-function couldNotRun(error: unknown): string {
-  if (error instanceof ReviewError) return error.message;
-  const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0];
-  return `The review stopped before it could check your whole Site (${detail}). Check that your Site is still being served, then run the review again.`;
 }
 
 function webAddress(text: string): URL | undefined {

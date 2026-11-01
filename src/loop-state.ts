@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 /** Where a Ticket stands in the Ticket loop, as the board shows it. */
 export interface TicketState {
-  status: "building" | "waiting" | "passed" | "parked" | "not-passed" | "blocked";
+  status: "building" | "reviewing" | "waiting" | "passed" | "parked" | "not-passed" | "blocked";
   /** Build sessions in the run that set this status; 0 for a Ticket its blockers kept unstarted. */
   attempts: number;
   /** Why the Ticket is stuck, in plain words. */

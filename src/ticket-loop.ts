@@ -1,10 +1,14 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
+import { clearCodeReview, codeReviewComment, codeReviewPrompt, isCodeReviewComment, numberedPoints, takeCodeReview } from "./code-review.ts";
 import type { SiteConfig } from "./config.ts";
 import { runGate } from "./gate.ts";
 import { branchExists, git, gitSucceeds, worktreeOf } from "./git.ts";
 import { recordTicketState, type TicketState } from "./loop-state.ts";
+import { couldNotRun, formatFailures } from "./review/report.ts";
+import type { ReviewReport } from "./review/review.ts";
+import { ServeError, withServedBuild } from "./served-build.ts";
 import { stageLabel } from "./stages.ts";
 import type { AgentCli } from "./agent-cli.ts";
 import type { Clock } from "./clock.ts";
@@ -14,6 +18,9 @@ import type { Issue, IssueEvent, PullRequest, Tracker } from "./tracker.ts";
 /** Local, uncommitted Factory state in the Site repository: worktrees and the loop's state per Spec. */
 const LOCAL_DIR = ".factory";
 
+/** Runs the Review checks on the Site served at `url`, whose repository is `repo`. */
+export type ReviewSite = (url: URL, repo: string) => Promise<ReviewReport>;
+
 export interface LoopOptions {
   siteDir: string;
   spec: number;
@@ -22,6 +29,7 @@ export interface LoopOptions {
   tracker: Tracker;
   host: Host;
   clock: Clock;
+  reviewSite: ReviewSite;
   log: (line: string) => void;
 }
 
@@ -76,6 +84,12 @@ export async function runTicketLoop(options: LoopOptions): Promise<LoopResult> {
   if (tickets.length === 0 && !specDone(all)) {
     log(`Spec #${spec} has no open Tickets in the Build Stage, so there is nothing to build.`);
     return result;
+  }
+
+  if (tickets.length > 0 && !config.serveCommand) {
+    throw new LoopError(
+      "factory.json has no serveCommand, so the Ticket loop cannot serve a Ticket's build to its Review checks, and without them no Ticket can Pass. Add the command that serves your Site to factory.json, then run the loop again.",
+    );
   }
 
   await keepLocalStateOutOfGit(siteDir);
@@ -295,14 +309,29 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
         ? { passed: false as const, reason: `The Build session failed: ${session.reason}` }
         : await runGate(worktree, base, branch, integration, config.testCommand);
     if (gate.passed) {
-      // Recorded before anything moves, so a run that dies before the Pass comment finishes it next time.
-      await git(siteDir, "update-ref", passRef(ticket.number), gate.head);
-      const refused = await finishPass(ticket, options, gate.head);
-      if (refused === undefined) {
-        await record(options, ticket, { status: "passed", attempts: attempt });
-        return "passed";
+      await record(options, ticket, { status: "reviewing", attempts: attempt });
+      const review = await reviewTicket(ticket, options, worktree, base, gate.head, attempt);
+      if ("question" in review) {
+        return park(ticket, options, attempt, `The code review needs a decision from you: ${review.question}`, [
+          "The code review stopped because it needs a decision only you can make:",
+          "",
+          review.question,
+          "",
+          `Answer in a comment on this Ticket, then run the Ticket loop again. The work so far stays on \`${branch}\`.`,
+        ]);
       }
-      reason = refused;
+      if (review.failed === undefined) {
+        // Recorded before anything moves, so a run that dies before the Pass comment finishes it next time.
+        await git(siteDir, "update-ref", passRef(ticket.number), gate.head);
+        const refused = await finishPass(ticket, options, gate.head);
+        if (refused === undefined) {
+          await record(options, ticket, { status: "passed", attempts: attempt });
+          return "passed";
+        }
+        reason = refused;
+      } else {
+        reason = review.failed;
+      }
     } else {
       reason = gate.reason;
     }
@@ -318,6 +347,67 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
     `The work so far stays on \`${branch}\` in \`${relative(siteDir, worktree)}\`. ` +
       "Say in a comment on this Ticket what should change, then run the Ticket loop again.",
   ]);
+}
+
+type ReviewOutcome = { failed?: string } | { question: string };
+
+/**
+ * A Ticket's Review of the commit its gate tested: the Review checks on its served build,
+ * then the code review. The code review only ever runs on green checks, so no verdict of
+ * its own can stand in for them. Whatever Review leaves in the worktree goes again.
+ */
+async function reviewTicket(ticket: Issue, options: LoopOptions, worktree: string, base: string, head: string, attempt: number): Promise<ReviewOutcome> {
+  try {
+    const failed = await runReviewChecks(options, worktree);
+    if (failed !== undefined) return { failed };
+    return await runCodeReview(ticket, options, worktree, base, head, attempt);
+  } finally {
+    await restoreWorktree(worktree, ticketBranch(ticket.number), head);
+  }
+}
+
+/** Why the Ticket's served build failed its Review checks, or undefined when it passed them. */
+async function runReviewChecks({ config, reviewSite }: LoopOptions, worktree: string): Promise<string | undefined> {
+  try {
+    const report = await withServedBuild(worktree, config, (url) => reviewSite(url, worktree));
+    return report.passed ? undefined : formatFailures(report);
+  } catch (error) {
+    return error instanceof ServeError ? error.message : couldNotRun(error);
+  }
+}
+
+async function runCodeReview(ticket: Issue, options: LoopOptions, worktree: string, base: string, head: string, attempt: number): Promise<ReviewOutcome> {
+  const { agentCli, config, tracker, log } = options;
+  for (;;) {
+    await clearCodeReview(worktree);
+    log(`Ticket #${ticket.number}: Review checks passed, code review`);
+    const session = await agentCli.runSession({
+      cwd: worktree,
+      prompt: codeReviewPrompt(ticket, base),
+      sandbox: true,
+      timeoutMs: config.sessionTimeoutMs,
+      stage: "review",
+    });
+    if (session.kind === "decision") return { question: session.question };
+    if (session.kind === "failed") return { failed: `The code review session failed: ${session.reason}` };
+    if (session.kind === "rate-limited") {
+      await waitOutRateLimit(ticket, options, attempt, session.until);
+      continue;
+    }
+    const review = await takeCodeReview(worktree);
+    if (!review) return { failed: "The code review session left no report the Ticket loop could read, so nothing approved this Ticket." };
+    if (review.points.length > 0) await tracker.comment(ticket.number, codeReviewComment(head, review));
+    return review.verdict === "approve" ? {} : { failed: `The code review sent this Ticket back:\n\n${numberedPoints(review.points)}` };
+  }
+}
+
+/**
+ * Puts the Ticket's branch and worktree back on the commit the gate tested, which left the
+ * tree clean: anything else there came from Review (build output, a session's edits).
+ */
+async function restoreWorktree(worktree: string, branch: string, head: string): Promise<void> {
+  await git(worktree, "checkout", "--quiet", "--force", "-B", branch, head);
+  await git(worktree, "clean", "--quiet", "--force", "-d");
 }
 
 /** Sleeps until the Agent CLI's rate limit lifts, showing the Ticket as waiting on the board meanwhile. */
@@ -356,7 +446,7 @@ function stillParked(history: IssueEvent[]): string | undefined {
 function answeredPark(history: IssueEvent[]): string | undefined {
   const at = history.findLastIndex((event) => event.kind === "comment" && event.body.startsWith(PARKED));
   if (at === -1) return undefined;
-  const since = history.slice(at + 1).flatMap((event) => (event.kind === "comment" ? [event.body] : []));
+  const since = history.slice(at + 1).flatMap((event) => (event.kind === "comment" && !isCodeReviewComment(event.body) ? [event.body] : []));
   // A Pass since the park settled it; what came after is not an answer to it.
   if (since.length === 0 || since.some((body) => PASS_COMMENT.test(body))) return undefined;
   const parked = history[at] as { body: string };

@@ -10,6 +10,15 @@ export interface SiteConfig {
   sessionTimeoutMs: number;
   /** How many Build sessions a Ticket gets in one run before it parks. */
   maxAttempts: number;
+  /** Builds the Site for Review, run with `sh -c` in the Ticket's worktree; a Site with no build step has none. */
+  buildCommand?: string;
+  /**
+   * Serves the built Site for Review, run with `sh -c` in the Ticket's worktree. It listens on
+   * the port it gets as `{port}` in the command or as PORT. The Ticket loop refuses a Site without it.
+   */
+  serveCommand?: string;
+  /** How long the Site gets to answer once its serve command runs. */
+  serveTimeoutMs: number;
 }
 
 export const CONFIG_FILE = "factory.json";
@@ -29,7 +38,7 @@ export async function readSiteConfig(siteDir: string): Promise<SiteConfig> {
   } catch {
     throw new ConfigError(`${CONFIG_FILE} is not valid JSON.`);
   }
-  const { testCommand, baseBranch = "main", sessionTimeoutMs = 60 * 60 * 1000, maxAttempts = 3 } = parsed;
+  const { testCommand, baseBranch = "main", sessionTimeoutMs = 60 * 60 * 1000, maxAttempts = 3, buildCommand, serveCommand, serveTimeoutMs = 60 * 1000 } = parsed;
   if (typeof testCommand !== "string" || testCommand.trim() === "") {
     throw new ConfigError(`${CONFIG_FILE} has no testCommand, so the Ticket loop cannot tell whether a Ticket is green.`);
   }
@@ -39,7 +48,21 @@ export async function readSiteConfig(siteDir: string): Promise<SiteConfig> {
   if (typeof maxAttempts !== "number" || !Number.isInteger(maxAttempts) || maxAttempts < 1) {
     throw new ConfigError(`${CONFIG_FILE} has a maxAttempts that is not a whole number of at least 1.`);
   }
-  return { testCommand, baseBranch, sessionTimeoutMs, maxAttempts };
+  for (const [name, command] of Object.entries({ buildCommand, serveCommand })) {
+    if (command !== undefined && (typeof command !== "string" || command.trim() === "")) {
+      throw new ConfigError(`${CONFIG_FILE} has a ${name} that is not a command.`);
+    }
+  }
+  if (typeof serveTimeoutMs !== "number") throw new ConfigError(`${CONFIG_FILE} has a serveTimeoutMs of the wrong type.`);
+  return {
+    testCommand,
+    baseBranch,
+    sessionTimeoutMs,
+    maxAttempts,
+    buildCommand: buildCommand as string | undefined,
+    serveCommand: serveCommand as string | undefined,
+    serveTimeoutMs,
+  };
 }
 
 /** The Agent CLIs the Factory has an adapter for, as a Site names them in `factory.json`. */
