@@ -1,4 +1,4 @@
-import type { Locator, Page } from "playwright";
+import type { ElementHandle, JSHandle, Page } from "playwright";
 import { goTo, movedOn, PageError, settled } from "./browser.ts";
 import type { Failure, ReviewCheck, Route } from "./check.ts";
 
@@ -64,25 +64,39 @@ async function tapMenu(page: Page, route: Route): Promise<Failure[] | undefined>
       {
         reason:
           "Tapping this menu button at phone width shows no links, so a Visitor on a phone cannot get anywhere with it. Check that it opens the menu, and that nothing lies on top of it.",
-        location: `${route.path} at "${await nameOf(toggleAt(page, menu.toggle))}"`,
+        location: `${route.path} at "${await nameOf(menu.toggle)}"`,
       },
     ];
   }
+  const names = await Promise.all(menu.items.map(nameOf));
   const failures: Failure[] = [];
-  for (const item of menu.items) {
+  let open: Menu | undefined = menu;
+  for (const [place, name] of names.entries()) {
     // A page may close its menu on the touch itself, before the tap is stopped.
-    if (!(await scan(page)).links.includes(item)) await openWith(page, route, menu.toggle);
-    const failure = await tapItem(page, linkAt(page, item));
+    if (open && !(await stillOpen(page, open, place))) open = await openAt(page, route, menu.place);
+    const item = open?.items[place];
+    if (!item) {
+      failures.push({
+        reason: "This menu item was gone when the menu was opened a second time, so a Visitor on a phone cannot count on it. Make the menu show the same links each time it opens.",
+        location: `${route.path} at "${name}"`,
+      });
+      continue;
+    }
+    const failure = await tapItem(page, item);
     if (failure) failures.push({ reason: failure.reason, location: `${route.path} at "${failure.name}"` });
   }
   return failures;
 }
 
+/** An open menu. Its elements hold only until the page loads again. */
 interface Menu {
-  /** Which of the page's toggles opened it. */
-  toggle: number;
-  /** The links it showed, by their place among the page's links; none when a control named as a menu opened nothing. */
-  items: number[];
+  /** Which of the page's toggles opened it, the one thing about it that outlasts a reload. */
+  place: number;
+  toggle: Control;
+  /** What the page showed before the tap, to tell the menu's links from the page's. */
+  closed: Sights;
+  /** The links it showed; none when a control that is surely a menu button opened nothing. */
+  items: Control[];
 }
 
 /**
@@ -91,45 +105,50 @@ interface Menu {
  * loading the page again.
  */
 async function openMenu(page: Page, route: Route): Promise<Menu | undefined> {
-  await goTo(page, route.address);
-  const { toggles } = await settled(page, () => scan(page));
+  const { toggles } = await load(page, route);
   for (const [place, toggle] of toggles.entries()) {
-    if (place > 0) await load(page, route);
-    const items = await tapToggle(page, toggle.index);
-    if (items && (items.length > 0 || toggle.named)) return { toggle: toggle.index, items };
+    const menu = place === 0 ? await tapToggle(page, toggle.element, place) : await openAt(page, route, place);
+    if (menu && (menu.items.length > 0 || toggle.firm)) return menu;
   }
   return undefined;
 }
 
-async function load(page: Page, route: Route): Promise<void> {
+async function load(page: Page, route: Route): Promise<Scan> {
   await goTo(page, route.address);
-  await settled(page, () => scan(page));
+  return settled(page, () => scan(page));
 }
 
-async function openWith(page: Page, route: Route, toggle: number): Promise<void> {
-  await load(page, route);
-  await tapToggle(page, toggle);
+async function openAt(page: Page, route: Route, place: number): Promise<Menu | undefined> {
+  const toggle = (await load(page, route)).toggles[place];
+  return toggle && tapToggle(page, toggle.element, place);
 }
 
-/** Taps a toggle and returns the links it showed, or undefined when it took the browser to another page. */
-async function tapToggle(page: Page, toggle: number): Promise<number[] | undefined> {
+/** Whether a link of the open menu still shows, compared with the page before the menu opened. */
+async function stillOpen(page: Page, menu: Menu, place: number): Promise<boolean> {
+  const { links } = await scan(page, menu.closed);
+  return page.evaluate(({ links, item }) => links.includes(item as Element), { links, item: menu.items[place] });
+}
+
+/** Taps a toggle and returns what it opened, or undefined when it took the browser to another page. */
+async function tapToggle(page: Page, toggle: Control, place: number): Promise<Menu | undefined> {
   const address = page.url();
   try {
-    const before = new Set((await scan(page)).links);
-    const { x, y } = await holdStill(toggleAt(page, toggle));
+    const { x, y } = await holdStill(page, toggle);
+    // Read after holdStill: scrolling to the toggle moves the page's own links too.
+    const { sights: closed } = await scan(page);
     await page.touchscreen.tap(x, y);
     const started = Date.now();
-    let items: number[] = [];
+    let items: Control[] = [];
     let changed = started;
     while (Date.now() - started < OPEN_TIMEOUT) {
       await page.waitForTimeout(MEASURE_EVERY);
       if (page.url() !== address) return undefined;
-      const now = (await scan(page)).links.filter((link) => !before.has(link));
-      if (now.length !== items.length) changed = Date.now();
-      items = now;
+      const { links } = await scan(page, closed);
+      if (links.length !== items.length) changed = Date.now();
+      items = links;
       if (items.length > 0 && Date.now() - changed >= OPEN_QUIET) break;
     }
-    return items;
+    return { place, toggle, closed, items };
   } catch (error) {
     if (movedOn(error)) return undefined;
     throw error;
@@ -137,9 +156,9 @@ async function tapToggle(page: Page, toggle: number): Promise<number[] | undefin
 }
 
 /** One tap on a menu item: why it failed, or undefined when the item took it. */
-async function tapItem(page: Page, item: Locator): Promise<{ name: string; reason: string } | undefined> {
+async function tapItem(page: Page, item: Control): Promise<{ name: string; reason: string } | undefined> {
   const name = await nameOf(item);
-  const { x, y, onScreen } = await holdStill(item);
+  const { x, y, onScreen } = await holdStill(page, item);
   if (!onScreen) {
     return {
       name,
@@ -180,24 +199,16 @@ async function tapItem(page: Page, item: Locator): Promise<{ name: string; reaso
   };
 }
 
-function toggleAt(page: Page, index: number): Locator {
-  return page.locator(TOGGLES).nth(index);
-}
-
-function linkAt(page: Page, index: number): Locator {
-  return page.locator("a[href]").nth(index);
-}
-
 /** What a Builder calls this control or link. */
-function nameOf(target: Locator): Promise<string> {
+function nameOf(target: Control): Promise<string> {
   return target.evaluate((element) => (element.textContent?.trim() || element.getAttribute("aria-label") || element.getAttribute("href") || element.tagName.toLowerCase()).slice(0, 60));
 }
 
 /** Where to touch the target once it stopped moving, after scrolling it into view. */
-async function holdStill(target: Locator): Promise<{ x: number; y: number; onScreen: boolean }> {
+async function holdStill(page: Page, target: Control): Promise<{ x: number; y: number; onScreen: boolean }> {
   let last = await spot(target);
   for (let measure = 0; measure < MEASURES; measure++) {
-    await target.page().waitForTimeout(MEASURE_EVERY);
+    await page.waitForTimeout(MEASURE_EVERY);
     const now = await spot(target);
     if (now.x === last.x && now.y === last.y) return now;
     last = now;
@@ -205,7 +216,7 @@ async function holdStill(target: Locator): Promise<{ x: number; y: number; onScr
   return last;
 }
 
-function spot(target: Locator): Promise<{ x: number; y: number; onScreen: boolean }> {
+function spot(target: Control): Promise<{ x: number; y: number; onScreen: boolean }> {
   return target.evaluate((element) => {
     element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
     const box = element.getClientRects()[0] ?? element.getBoundingClientRect();
@@ -215,41 +226,95 @@ function spot(target: Locator): Promise<{ x: number; y: number; onScreen: boolea
   });
 }
 
+/** An element of the page itself, held directly: a position among the page's elements shifts when a menu is inserted. */
+type Control = ElementHandle<Element>;
+
+/** How far in sight each of the page's links is, as `scan` measures it. */
+type Sights = JSHandle<Map<Element, number>>;
+
 interface Scan {
-  /** The links a Visitor can see or scroll to now, by their place among the page's links. */
-  links: number[];
+  /** The links a Visitor can see or scroll to now; with `before`, only those more in sight than they were then. */
+  links: Control[];
+  sights: Sights;
   /** The toggles a Visitor can see: named as a menu first, then in the order of the page. */
-  toggles: { index: number; named: boolean }[];
+  toggles: { element: Control; firm: boolean }[];
 }
 
-/** Reads the page as a Visitor sees it: a link slid off to the side or folded to no height is not there yet. */
-function scan(page: Page): Promise<Scan> {
-  return page.evaluate((selector) => {
-    const clips = (style: CSSStyleDeclaration) => style.overflowX !== "visible" || style.overflowY !== "visible";
-    const shown = (element: Element) => {
-      if (!element.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
-      const box = element.getBoundingClientRect();
-      if (box.width === 0 || box.height === 0 || box.right <= 0 || box.left >= window.innerWidth || box.bottom <= 0) return false;
-      for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
-        if (!clips(getComputedStyle(parent))) continue;
-        const clip = parent.getBoundingClientRect();
-        if (box.right <= clip.left || box.left >= clip.right || box.bottom <= clip.top || box.top >= clip.bottom) return false;
-      }
-      return true;
-    };
-    // A control that calls itself a menu, by its words or its code name, in the languages a Builder is likely to write in.
-    const named = (element: Element) =>
-      /men[uüú]|\bnav|burger/i.test(
-        [element.textContent, element.getAttribute("aria-label"), element.getAttribute("title"), element.id, element.getAttribute("class"), element.getAttribute("aria-controls")].join(" "),
-      );
-    const toggles = [...document.querySelectorAll(selector)].flatMap((element, index) => {
-      if (!shown(element)) return [];
-      const isNamed = named(element);
-      return isNamed || element.closest('header, nav, [role="banner"], [role="navigation"]') ? [{ index, named: isNamed }] : [];
-    });
-    return {
-      links: [...document.querySelectorAll("a[href]")].flatMap((link, index) => (shown(link) ? [index] : [])),
-      toggles: [...toggles.filter((toggle) => toggle.named), ...toggles.filter((toggle) => !toggle.named)],
-    };
-  }, TOGGLES);
+/**
+ * Reads the page as a Visitor sees it. A link slid off to the side, folded to no
+ * height or cut away is not there yet (0). One pinned below the screen is there
+ * but cannot be reached (1): that is a closed bottom sheet when the menu is shut,
+ * and an item a Visitor cannot get to when the menu is open, so what counts as
+ * opened is what came further into sight. The rest is on the screen or scrolled to (2).
+ *
+ * A toggle is `firm` when it surely is a menu button, so that opening nothing is
+ * a fault: "See our menu" on a restaurant's page may just be words.
+ */
+async function scan(page: Page, before?: Sights): Promise<Scan> {
+  const found = await page.evaluateHandle(
+    ({ selector, before }) => {
+      const clips = (style: CSSStyleDeclaration) => style.overflowX !== "visible" || style.overflowY !== "visible";
+      const length = (value: string, whole: number) => (value.endsWith("%") ? (parseFloat(value) / 100) * whole : parseFloat(value));
+      const cutAway = (path: string, box: DOMRect) => {
+        const [, shape, shapeArguments = ""] = /^(\w+)\((.*)\)/.exec(path) ?? [];
+        if (shape === "circle" || shape === "ellipse") return /^0(px|%)?(\s|$)/.test(shapeArguments);
+        if (shape === "polygon") {
+          const points = shapeArguments.split(",").map((point) => point.trim().split(/\s+/));
+          return new Set(points.map(([x]) => x)).size === 1 || new Set(points.map(([, y]) => y)).size === 1;
+        }
+        if (shape !== "inset") return false;
+        const [top = "0", right = top, bottom = top, left = right] = (shapeArguments.split(" round ")[0] ?? "").trim().split(/\s+/);
+        return length(top, box.height) + length(bottom, box.height) >= box.height || length(left, box.width) + length(right, box.width) >= box.width;
+      };
+      const sight = (element: Element) => {
+        if (!element.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return 0;
+        const box = element.getBoundingClientRect();
+        if (box.width === 0 || box.height === 0 || box.right <= 0 || box.left >= window.innerWidth || box.bottom <= 0) return 0;
+        let pinned = false;
+        for (let parent: Element | null = element; parent && parent !== document.body; parent = parent.parentElement) {
+          const style = getComputedStyle(parent);
+          const clip = parent.getBoundingClientRect();
+          if (cutAway(style.clipPath, clip)) return 0;
+          if (parent !== element && clips(style) && (box.right <= clip.left || box.left >= clip.right || box.bottom <= clip.top || box.top >= clip.bottom)) return 0;
+          pinned ||= style.position === "fixed";
+        }
+        return pinned && box.top >= window.innerHeight ? 1 : 2;
+      };
+      // Whether a control calls itself a menu, in the languages a Builder is likely to write in.
+      const menuWord = /men[uüú](?!\p{L})|(?<!\p{L})nav(?:igation|egaci[oó]n)?(?!\p{L})/iu;
+      const menuCode = /^(?:(?:main|mobile|site|primary|header|top|nav|hamburger)[-_]*)?(?:menu|nav|navbar|navigation|burger|hamburger)(?:[-_]*(?:toggle|toggler|button|btn|icon|trigger|open|opener))?$/i;
+      const describe = (element: Element) => {
+        const labels = [element.textContent, element.getAttribute("aria-label"), element.getAttribute("title")].map((label) => label?.trim() ?? "");
+        const codes = [element.id, ...element.classList, ...(element.getAttribute("aria-controls") ?? "").split(/\s+/)];
+        const spoken = labels.some((label) => menuWord.test(label));
+        const coded = codes.some((code) => menuCode.test(code));
+        const onBar = element.closest('header, nav, [role="banner"], [role="navigation"]') !== null;
+        const saysOnlyMenu = labels.some((label) => menuWord.test(label) && !/\s/.test(label));
+        const declared = element.matches("[aria-expanded], [aria-controls], [popovertarget]");
+        return { element, onBar, named: spoken || coded, firm: (spoken || coded) && (onBar || saysOnlyMenu || (coded && declared)) };
+      };
+      const toggles = [...document.querySelectorAll(selector)].filter((element) => sight(element) === 2).map(describe).filter((toggle) => toggle.named || toggle.onBar);
+      const ordered = [...toggles.filter((toggle) => toggle.named), ...toggles.filter((toggle) => !toggle.named)];
+      const sights = new Map([...document.querySelectorAll("a[href]")].map((link) => [link, sight(link)]));
+      return {
+        links: [...sights].flatMap(([link, now]) => (now > (before?.get(link) ?? 0) ? [link] : [])),
+        sights,
+        toggles: ordered.map((toggle) => toggle.element),
+        firm: ordered.map((toggle) => toggle.firm),
+      };
+    },
+    { selector: TOGGLES, before },
+  );
+  const firm = await found.evaluate((read) => read.firm);
+  const toggles = await elementsOf(await found.getProperty("toggles"));
+  return {
+    links: await elementsOf(await found.getProperty("links")),
+    sights: await found.getProperty("sights"),
+    toggles: toggles.map((element, index) => ({ element, firm: firm[index] === true })),
+  };
+}
+
+async function elementsOf(list: JSHandle<Element[]>): Promise<Control[]> {
+  const properties = await list.getProperties();
+  return [...properties.values()].flatMap((property) => (property.asElement() as Control | null) ?? []);
 }

@@ -213,6 +213,118 @@ document.getElementById("faq").addEventListener("click", () => document.getEleme
     expect(thumb.failures).toEqual([]);
   });
 
+  /** A menu in the body, inserted on open as `{open && <nav>}` does, above links of the page that stay. */
+  function insertedMenuPage(navStyle: string): string {
+    const script = `<script>
+document.querySelector("button").addEventListener("click", () => {
+  document.querySelector("button").insertAdjacentHTML("afterend", '<nav id="panel" style="${navStyle}">${PANEL_LINKS}</nav>');
+});
+</script>`;
+    return phonePage(
+      `#panel { position: fixed; inset: 3rem 0 0 0; background: #fff; z-index: 5; } #panel a { display: block; padding: 1rem; }`,
+      `<header><button type="button">Menu</button></header><a href="/p1">P1</a><a href="/p2">P2</a><a href="/p3">P3</a>${script}`,
+    );
+  }
+
+  it("taps a menu that only exists while open, not the page links it pushes along", async () => {
+    const { thumb } = await reviewPages({ "/": insertedMenuPage(""), ...ROUTES });
+
+    expect(thumb.notApplicable).toBeUndefined();
+    expect(thumb.failures).toEqual([]);
+  });
+
+  it("catches a fall-through in a menu that only exists while open", async () => {
+    const { thumb } = await reviewPages({ "/": insertedMenuPage("pointer-events: none"), ...ROUTES });
+
+    expect(thumb.failures.map((failure) => failure.location)).toEqual(['/ at "One"', '/ at "Two"']);
+    expect(thumb.failures[0]!.reason).toMatch(/page behind/i);
+  });
+
+  it.each([
+    ["below the screen", "position: fixed; left: 0; right: 0; bottom: 0; transform: translateY(100%);", "transform: none;"],
+    ["clipped to nothing", "position: fixed; left: 0; right: 0; top: 3rem; clip-path: inset(0 0 100% 0);", "clip-path: none;"],
+    ["clipped to nothing in a polygon", "position: fixed; left: 0; right: 0; top: 3rem; clip-path: polygon(0 0, 100% 0, 100% 0, 0 0);", "clip-path: none;"],
+  ])("opens a menu closed %s", async (_, closed, open) => {
+    const page = phonePage(`#panel { background: #fff; z-index: 5; ${closed} } #panel.open { ${open} } #panel a { display: block; padding: 1rem; }`, `<button type="button">Menu</button><nav id="panel">${PANEL_LINKS}</nav>${TOGGLE_SCRIPT}`);
+    const { thumb } = await reviewPages({ "/": page, ...ROUTES });
+
+    expect(thumb.notApplicable).toBeUndefined();
+    expect(thumb.failures).toEqual([]);
+  });
+
+  it("does not take a closed bottom sheet for what another button opened", async () => {
+    const page = phonePage(
+      `#panel { position: fixed; left: 0; right: 0; bottom: 0; transform: translateY(100%); }`,
+      `<header><button type="button">Search</button></header><nav id="panel">${PANEL_LINKS}</nav>`,
+    );
+    const { thumb } = await reviewPages({ "/": page, ...ROUTES });
+
+    expect(thumb.notApplicable).toMatch(/no .*menu/i);
+  });
+
+  it("reopens a bottom sheet that closes as an item is tapped", async () => {
+    const page = phonePage(
+      `#panel { position: fixed; left: 0; right: 0; bottom: 0; background: #fff; transform: translateY(100%); } #panel.open { transform: none; } #panel a { display: block; padding: 1rem; }`,
+      `<button type="button">Menu</button><nav id="panel">${PANEL_LINKS}</nav>${TOGGLE_SCRIPT}
+<script>window.addEventListener("click", (event) => { if (event.target.closest("#panel")) document.getElementById("panel").classList.remove("open"); }, true);</script>`,
+    );
+    const { thumb } = await reviewPages({ "/": page, ...ROUTES });
+
+    expect(thumb.notApplicable).toBeUndefined();
+    expect(thumb.failures).toEqual([]);
+  });
+
+  it.each([
+    ["See our menu", `<button type="button">See our menu</button>`],
+    ["Print the menu of the day", `<button type="button">Print the menu of the day</button>`],
+    ["an accordion about the menu", `<button type="button" aria-expanded="false">Our menu</button>`],
+    ["btn-navy", `<button type="button" class="btn btn-navy">Book</button>`],
+    ["carousel-nav", `<button type="button" class="carousel-nav" aria-controls="slides">Next</button><div id="slides"></div>`],
+  ])("does not fail a Site without a menu for a button like %s", async (_, button) => {
+    const { thumb } = await reviewPages({ "/": phonePage("", button) });
+
+    expect(thumb.notApplicable).toMatch(/no .*menu/i);
+    expect(thumb.failures).toEqual([]);
+  });
+
+  it("fails a menu button in the header or wired to a menu that opens nothing", async () => {
+    for (const button of [`<header><button type="button">Open the menu</button></header>`, `<button type="button" class="hamburger" aria-controls="mobile-menu" aria-label="Open"></button>`]) {
+      const { thumb } = await reviewPages({ "/": phonePage("", button) });
+      await site?.close();
+      site = undefined;
+      expect(thumb.failures[0]!.reason).toMatch(/no links/i);
+    }
+  });
+
+  it("is not thrown off by controls and links inside a shadow root", async () => {
+    const shadow = `<x-widget></x-widget><script>
+document.querySelector("x-widget").attachShadow({ mode: "open" }).innerHTML = '<a href="/one">Shadow link</a><button type="button">Close</button>';
+</script>`;
+    const page = (open: string) =>
+      phonePage(
+        `#panel { display: none; } #panel.open { display: block; position: fixed; top: 6rem; left: 0; right: 0; background: #fff; z-index: 5; ${open} } #panel a { display: block; padding: 1rem; }`,
+        `${shadow}<header><button id="menu" type="button">Menu</button></header><nav id="panel">${PANEL_LINKS}</nav>
+<script>document.getElementById("menu").addEventListener("click", () => document.getElementById("panel").classList.toggle("open"));</script>`,
+      );
+
+    const working = (await reviewPages({ "/": page(""), ...ROUTES })).thumb;
+    await site?.close();
+    site = undefined;
+    const fallsThrough = (await reviewPages({ "/": page("pointer-events: none;"), ...ROUTES })).thumb;
+
+    expect(working.notApplicable).toBeUndefined();
+    expect(working.failures).toEqual([]);
+    expect(fallsThrough.failures.map((failure) => failure.location)).toEqual(['/ at "One"', '/ at "Two"']);
+  });
+
+  it("takes a button that reloads the page at the same address for no menu", async () => {
+    const page = phonePage("", `<header><button type="button" onclick="location.reload()">Refresh</button></header>`);
+    const { thumb } = await reviewPages({ "/": page });
+
+    expect(thumb.notApplicable).toMatch(/no .*menu/i);
+    expect(thumb.failures).toEqual([]);
+  });
+
   it("does not leave the page or need the item's address to answer", async () => {
     const page = panelPage("").replace(`<a href="/two">Two</a>`, `<a href="#top">Two</a><a href="https://unreachable.invalid/" target="_blank">Three</a><a href="mailto:hello@example.com">Four</a>`);
     const { thumb } = await reviewPages({ "/": page, ...ROUTES });
