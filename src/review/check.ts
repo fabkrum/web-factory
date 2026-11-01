@@ -39,12 +39,17 @@ export interface ReviewCheck {
   area: ReviewArea;
   /** True for a check that reads the Site's repository (its tests, its dependencies): it runs only when there is one. */
   needsRepo?: boolean;
-  run(site: SiteUnderReview): Promise<Failure[] | NotRun>;
+  run(site: SiteUnderReview): Promise<Failure[] | NotRun | NotApplicable>;
 }
 
 /** What a check returns when it could not measure this Site at all, with why in plain language; it does not stop a Pass. */
 export interface NotRun {
   notRun: string;
+}
+
+/** What a check returns when it measured the Site and found nothing it applies to, with why in plain language; it does not stop a Pass. */
+export interface NotApplicable {
+  notApplicable: string;
 }
 
 /** Anything that stops a review from measuring the Site at all, in words the Builder can act on. */

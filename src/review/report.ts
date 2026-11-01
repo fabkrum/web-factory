@@ -14,6 +14,10 @@ export function formatReport(report: ReviewReport): string {
         lines.push(`  NOT RUN  ${check.name}`, indent(check.skipped));
         continue;
       }
+      if (check.notApplicable) {
+        lines.push(`  NOT APPLICABLE  ${check.name}`, indent(check.notApplicable));
+        continue;
+      }
       lines.push(`  ${check.passed ? "PASS" : "FAIL"}  ${check.name}`);
       for (const failure of check.failures.slice(0, SHOWN_PER_CHECK)) {
         lines.push(indent(failure.location), indent(failure.reason));

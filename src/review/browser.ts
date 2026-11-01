@@ -126,7 +126,7 @@ async function within<T>(work: Promise<T>, ms: number): Promise<T> {
 }
 
 /** The error Playwright throws when the page navigated away while the review was reading it. */
-function movedOn(error: unknown): boolean {
+export function movedOn(error: unknown): boolean {
   return !(error instanceof PageError) && error instanceof Error && /context was destroyed|navigat/i.test(error.message);
 }
 
