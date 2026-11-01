@@ -135,9 +135,15 @@ function packCheck(check: Pick<ReviewCheck, "id" | "name">, judge: (visit: Visit
 const IMPRESSUM = /impressum|imprint|legal[\s_-]*notice|anbieterkennzeichnung/i;
 const PRIVACY_POLICY = /datenschutz|privacy/i;
 
+/** A route that is the page itself, by its whole last path segment: /impressum.html is, /shop/imprint-tshirt is not. */
+const IMPRESSUM_ROUTE = /^(?:impressum|imprint|legal[\s_-]*notice|anbieterkennzeichnung)$/i;
+const PRIVACY_POLICY_ROUTE = /^(?:datenschutz(?:[_-]?(?:erkl(?:ae|ä|%c3%a4)rung|hinweise?|informationen?|bestimmungen))?|privacy(?:[_-]?(?:policy|notice|statement))?)$/i;
+
 /** A page the law wants one click away, and how to word its absence. */
 interface RequiredPage {
   pattern: RegExp;
+  /** The last path segment of the page itself. */
+  route: RegExp;
   /** What the page is, for the reasons. */
   called: string;
   why: string;
@@ -147,6 +153,7 @@ interface RequiredPage {
 
 const IMPRESSUM_PAGE: RequiredPage = {
   pattern: IMPRESSUM,
+  route: IMPRESSUM_ROUTE,
   called: "an Impressum",
   why: "German law wants the name and contact details of whoever runs a Site one click away from every page.",
   label: "Impressum",
@@ -154,6 +161,7 @@ const IMPRESSUM_PAGE: RequiredPage = {
 
 const PRIVACY_POLICY_PAGE: RequiredPage = {
   pattern: PRIVACY_POLICY,
+  route: PRIVACY_POLICY_ROUTE,
   called: "a privacy policy",
   why: "German law wants Visitors told what happens to their data, one click away from every page.",
   label: "Datenschutz",
@@ -163,6 +171,11 @@ const PRIVACY_POLICY_PAGE: RequiredPage = {
 function pathMatches(pattern: RegExp, address: string): boolean {
   const url = new URL(address);
   return pattern.test(`${url.pathname}${url.hash}`);
+}
+
+/** Whether this route is the page itself, whatever its file ending. */
+function isPage({ route }: RequiredPage, { path }: Route): boolean {
+  return route.test(path.slice(path.lastIndexOf("/") + 1).replace(/\.\w+$/, ""));
 }
 
 /** A link that opens nothing: `#` or an empty href. */
@@ -176,9 +189,10 @@ function goesNowhere(link: Link): boolean {
  * A link to another party's address counts unopened: a company may keep its
  * Impressum on its main site.
  */
-function pageLinked({ pattern, called, why, label }: RequiredPage): (visit: Visit, site: SiteUnderReview) => Promise<Failure[]> {
+function pageLinked(page: RequiredPage): (visit: Visit, site: SiteUnderReview) => Promise<Failure[]> {
+  const { pattern, called, why, label } = page;
   return async ({ route, links }, site) => {
-    if (pattern.test(route.path)) return [];
+    if (isPage(page, route)) return [];
     const named = links.filter((link) => pattern.test(link.text) || pathMatches(pattern, link.href));
     const usable = named.filter((link) => !goesNowhere(link));
     if (usable.length === 0) {
@@ -220,34 +234,67 @@ function shownPath(address: string): string {
   return `${url.pathname}${url.search}`;
 }
 
-/** An amount in euros as a page shows it: 49,00 €, EUR 49, 12 Euro. */
-const PRICE = /\d[\d.,]*\s?(?:€|EUR\b|Euro\b)|(?:€|\bEUR\b)\s?\d[\d.,]*/i;
+const AMOUNT = String.raw`\d[\d.,]*(?:(?<=,)[-–—]+)?`;
+
+/** An amount in euros as a page shows it: 49,00 €, EUR 49, EUR49, 12 Euro, 49,- €. */
+const PRICE = new RegExp(String.raw`${AMOUNT}\s?(?:€|EUR\b|Euro\b)|(?:€|\bEUR)\s?${AMOUNT}`, "i");
 
 const VAT_WORD = String.raw`(?:MwSt|Mehrwertsteuer|USt|Umsatzsteuer|VAT)`;
 
-/** The page says its prices include VAT, or states the small business rule that replaces it. */
-const GROSS_PRICES = new RegExp(
+/** One character that does not end the clause: a comma inside 19,5 % and the dot of "gesetzl. MwSt." do not. */
+const IN_CLAUSE = String.raw`(?!,(?!\d)|[;!?]|(?<!\bgesetzl|\bges)\.\s)[^\n]`;
+
+/** A word that takes the VAT word after it away from the price. */
+const NOT_INCLUDED = String.raw`(?:zzgl|zuz[uü]gl\w*|ex[ck]l\w*|plus|ohne|without|kein\w*|nicht|not|no)`;
+
+/** The word brutto on its own: a "Brutto-Netto-Rechner" says nothing about a price. */
+const BRUTTO = String.raw`brutto\b(?![-–/]\s*netto)`;
+
+/** The page says its prices include VAT. */
+const VAT_INCLUDED = new RegExp(
   [
-    String.raw`(?<!nicht\s|not\s)\b(?:inkl|inklusive|incl|including|enth[aä]lt|enthalten)\b[^\n]{0,40}?\b${VAT_WORD}\b`,
-    String.raw`\b${VAT_WORD}\.?\s+(?:is\s+|ist\s+)?(?:included|enthalten)`,
-    String.raw`\bbrutto`,
+    String.raw`(?<!nicht\s|not\s)\b(?:inkl|inklusive|incl|including|enth[aä]lt|enthalten)\b\.?(?:(?!\b${NOT_INCLUDED}\b)${IN_CLAUSE}){0,40}?\b${VAT_WORD}\b`,
+    String.raw`(?<!\b${NOT_INCLUDED}\b\.?[^,;.\n]{0,20})\b${VAT_WORD}\.?\s+(?:is\s+|ist\s+)?(?:included|enthalten)`,
+    String.raw`\bbrutto-?preis`,
+    String.raw`\bpreise?\s+(?:sind\s+|ist\s+)?${BRUTTO}`,
+    String.raw`(?:€|\bEUR|\bEuro)[^\S\n]+${BRUTTO}`,
+    String.raw`\bbrutto:?[^\S\n]+(?:€|EUR\b|\d)`,
     String.raw`\bgross\s+price`,
-    String.raw`§\s*19\s*UStG`,
-    String.raw`Kleinunternehmer`,
   ].join("|"),
   "i",
 );
 
+/** The page states the small business rule that replaces the VAT note. */
+const SMALL_BUSINESS_RULE = new RegExp(
+  [
+    String.raw`§\s*19\s*UStG`,
+    String.raw`\bKleinunternehmerregelung`,
+    String.raw`\bKleinunternehmer\w*(?:${IN_CLAUSE}){0,60}?\b${VAT_WORD}\b`,
+    String.raw`\b${VAT_WORD}\b(?:${IN_CLAUSE}){0,60}?\bKleinunternehmer`,
+  ].join("|"),
+  "i",
+);
+
+/** The page adds VAT on top of a price, which a small business does not do. */
+const VAT_ADDED = new RegExp(String.raw`\b(?:zzgl|zuz[uü]gl\w*|ex[ck]l\w*|plus)\b\.?(?:${IN_CLAUSE}){0,40}?\b${VAT_WORD}\b`, "i");
+
+/** The first price on a page whose text does not say its prices are gross, or undefined. */
+export function priceWithoutGrossNote(text: string): string | undefined {
+  const price = PRICE.exec(text)?.[0];
+  const gross = VAT_INCLUDED.test(text) || (SMALL_BUSINESS_RULE.test(text) && !VAT_ADDED.test(text));
+  return gross ? undefined : price?.trim();
+}
+
 function germanPrices({ route, text }: Visit): Failure[] {
   // An Impressum states a share capital and a privacy policy a fine: amounts, not prices.
-  if (IMPRESSUM.test(route.path) || PRIVACY_POLICY.test(route.path)) return [];
-  const price = PRICE.exec(text)?.[0];
-  if (!price || GROSS_PRICES.test(text)) return [];
+  if (isPage(IMPRESSUM_PAGE, route) || isPage(PRIVACY_POLICY_PAGE, route)) return [];
+  const price = priceWithoutGrossNote(text);
+  if (!price) return [];
   return [
     {
       reason:
         'This page shows a price but does not say it is the full price with VAT. German law wants Visitors shown the gross price they will pay. Add "inkl. MwSt." next to the price, or once on the page for all of them. A small business under § 19 UStG that charges no VAT says that instead.',
-      location: `${route.path} at "${price.trim()}"`,
+      location: `${route.path} at "${price}"`,
     },
   ];
 }

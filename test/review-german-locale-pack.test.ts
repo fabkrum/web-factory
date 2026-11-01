@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { priceWithoutGrossNote } from "../src/review/german-locale-pack.ts";
 import { copyFixtureRepo, type FixtureRepo } from "./harness/fixture-repo.ts";
 import { serveFixtureSite, type ServedSite } from "./harness/fixture-site.ts";
 import { runFactory } from "./harness/run-factory.ts";
@@ -92,6 +93,50 @@ async function thirdParty(): Promise<{ origin: string; requested: string[] }> {
   const server = await servePagesFor({ "/font.woff2": answer, "/pixel.png": answer, "/tracker.js": answer });
   return { origin: new URL(server.url).origin.replace("127.0.0.1", "localhost"), requested };
 }
+
+describe("what the German price check reads on a page", () => {
+  it.each([
+    ["a VAT note next to the price", "€ 49 inkl. 19 % MwSt."],
+    ["a note with a decimal rate", "49 € inkl. 19,5 % MwSt."],
+    ["an abbreviated note", "49 € inkl. gesetzl. MwSt."],
+    ["shipping charged on top of a gross price", "49 € inkl. MwSt. zzgl. Versand"],
+    ["a net price beside its gross price", "41,18 € zzgl. MwSt. (49,00 € inkl. MwSt.)"],
+    ["the VAT word first", "49 €, MwSt. ist enthalten"],
+    ["a gross price by name", "Bruttopreis: 49 €"],
+    ["brutto beside the amount", "49 € brutto"],
+    ["all prices brutto", "49 €\nAlle Preise sind brutto."],
+    ["a small business in plain words", "49 €\nAls Kleinunternehmer weise ich keine Umsatzsteuer aus."],
+    ["the small business rule by name", "49 €\nEs gilt die Kleinunternehmerregelung."],
+  ])("accepts %s", (_, text) => {
+    expect(priceWithoutGrossNote(text)).toBeUndefined();
+  });
+
+  it.each([
+    ["shipping included and VAT added, with a comma", "49,00 € inkl. Versand, zzgl. MwSt."],
+    ["shipping included and VAT added, without a comma", "49,00 € inkl. Versand zzgl. MwSt."],
+    ["VAT left out in another sentence", "49,00 € inkl. Versand. Die MwSt. kommt hinzu."],
+    ["prices that contain no VAT", "49 €\nPreise enthalten keine MwSt."],
+    ["no VAT contained, the VAT word first", "49 €\nIm Preis ist keine MwSt. enthalten."],
+    ["excluding VAT", "€49 excl. VAT"],
+    ["plus VAT", "49 € plus MwSt."],
+    ["a tariff for small businesses, net", "Tarif für Kleinunternehmer 49 € zzgl. MwSt."],
+    ["a tariff for small businesses with no VAT note", "Tarif für Kleinunternehmer 49 €"],
+    ["a brutto-netto calculator link", "49 €\nBrutto-Netto-Rechner"],
+    ["the word brutto in a salary", "49 €\nUnser Bruttogehalt ist fair."],
+    ["a dash after the comma", "49,- €"],
+    ["an en dash after the comma", "49,– €"],
+    ["two dashes after the comma", "49,-- EUR"],
+    ["a dash with the currency first", "€ 49,-"],
+    ["an amount straight after EUR", "EUR49"],
+  ])("fails %s", (_, text) => {
+    expect(priceWithoutGrossNote(text)).toBeDefined();
+  });
+
+  it("names the price as the page shows it, its dash included", () => {
+    expect(priceWithoutGrossNote("49,- €")).toBe("49,- €");
+    expect(priceWithoutGrossNote("€ 49,-")).toBe("€ 49,-");
+  });
+});
 
 describe("the German Locale pack", () => {
   it("passes a Site with an Impressum, a privacy policy, German prices and no third party", async () => {
@@ -198,6 +243,28 @@ describe("the German Locale pack", () => {
     const { report } = await reviewWithPack(site.url, ["legal/german-prices"]);
 
     expect(failingChecks(report)).toEqual([]);
+  });
+
+  it.each([["/products/privacy-filter"], ["/shop/imprint-tshirt"], ["/datenschutz-schulung"]])("checks the price on %s, whose path only contains a legal word", async (path) => {
+    const site = await servePagesFor({ ...legalSite(`<a href="${path}">Mehr</a>`), [path]: legalPage("<p>49 €</p>") });
+    const { report } = await reviewWithPack(site.url, ["legal/german-prices"]);
+
+    expect(checkOf(report, "legal/german-prices").failures.map((failure) => failure.location)).toContain(`${path} at "49 €"`);
+  });
+
+  it.each([["/datenschutz.html"], ["/impressum.htm"], ["/en/privacy-policy"], ["/de/datenschutzerklaerung"], ["/legal-notice"], ["/en/imprint"]])("does not read an amount on the legal page %s as a price", async (path) => {
+    const site = await servePagesFor({ ...legalSite(`<a href="${path}">Mehr</a>`), [path]: legalPage("<p>Bußgeld bis 20.000 €</p>") });
+    const { report } = await reviewWithPack(site.url, ["legal/german-prices"]);
+
+    expect(failingChecks(report)).toEqual([]);
+  });
+
+  it("still wants the links on a route whose path only contains a legal word", async () => {
+    const site = await servePagesFor({ ...legalSite('<a href="/shop/imprint-tshirt">Shirt</a> <a href="/datenschutz-schulung">Kurs</a>'), "/shop/imprint-tshirt": "<!doctype html><title>T</title><p>Shirt</p>", "/datenschutz-schulung": "<!doctype html><title>S</title><p>Kurs</p>" });
+    const { report } = await reviewWithPack(site.url, ["legal/impressum", "legal/privacy-policy"]);
+
+    expect(checkOf(report, "legal/impressum").failures.map((failure) => failure.location)).toContain("/shop/imprint-tshirt");
+    expect(checkOf(report, "legal/privacy-policy").failures.map((failure) => failure.location)).toContain("/datenschutz-schulung");
   });
 
   it("fails a web font loaded from a third party before consent, and only as a font", async () => {
