@@ -47,7 +47,7 @@ Then run:
 npx factory approve change <number> .factory/change.json
 ```
 
-It files a new Ticket in the Build Stage and moves the Spec back there. For several changes, run it once per change, with one file each. Something that goes beyond this Spec belongs in a new Request: say so and use the `request` skill.
+It files a new Ticket in the Build Stage and moves the Spec back there. For several changes, run it once per change, with one file each, before the Ticket loop starts. Something that goes beyond this Spec belongs in a new Request: say so and use the `request` skill.
 
 Tell the Builder the pull request stays open, and that the next step is to start the Ticket loop with `npx factory loop <number>`. Once it is done, the Spec is back here with a new Preview. Stop here.
 

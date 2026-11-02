@@ -52,8 +52,11 @@ export async function approveChange(options: { siteDir: string; spec: number; fi
   if (!Array.isArray(change.acceptance) || change.acceptance.length === 0) throw refuse("The change's file and its fields have no acceptance.");
   const acceptance = change.acceptance.map((entry, index) => text(entry, `acceptance[${index}]`));
 
-  await specInApprove(spec, tracker);
-  if (!(await tracker.pullRequestFrom(integrationBranch(spec)))) {
+  // An earlier change moved the Spec to Build; with its pull request still open, it takes this one too.
+  const issue = await tracker.getIssue(spec);
+  const open = await tracker.pullRequestFrom(integrationBranch(spec));
+  if (!open || issue.state === "closed" || !inStage(issue, "build")) await specInApprove(spec, tracker);
+  if (!open) {
     throw refuse(`Spec #${spec} has no open pull request for this change to join. If it is merged, run factory approve ${spec}, and bring the change as a new Request.`);
   }
   // The Ticket first, so a run GitHub cuts short leaves the Spec in Approve, and running again finishes it.

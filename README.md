@@ -42,7 +42,7 @@ The Review check `code/design` runs on every Ticket: DESIGN.md's lint and contra
 
 Once every Ticket of a Spec has Passed, the Ticket loop opens the Spec's pull request and moves the Spec to the Approve Stage. The `approve` skill walks the Builder through it: `factory approve <spec>` shows the Preview and the pull request, the Builder reads the Preview and, when the Site does what the Spec says, presses the merge button on GitHub themselves. No session merges: that button is the Builder's Approve. The same command run again sees the merge, also one made without the skill, and moves the Spec to the Publish Stage.
 
-If the Builder asks for changes instead, the skill writes the change to a file and `factory approve change <spec> <change-file>` files it as a new Ticket in the Build Stage and moves the Spec back there. The next `factory loop <spec>` builds it, pushes to the same pull request, makes a new Preview, and the Spec is back in Approve.
+If the Builder asks for changes instead, the skill writes the change to a file and `factory approve change <spec> <change-file>` files it as a new Ticket in the Build Stage and moves the Spec back there. For several changes it runs once per change, while the pull request is open. The next `factory loop <spec>` builds it, pushes to the same pull request, makes a new Preview, and the Spec is back in Approve.
 
 ## What to do now
 

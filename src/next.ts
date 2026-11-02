@@ -27,7 +27,9 @@ type Kind = (typeof ORDER)[number];
 
 const SKILLS: Partial<Record<Kind, BuilderSkill>> = { approve: "approve", design: "design", spec: "spec", request: "spec" };
 
-function kindOf(stage: Stage, card: Card, specsWithTickets: Set<number | undefined>): Kind | undefined {
+const isRunning = ({ status }: Card): boolean => status === "building" || status === "reviewing" || status === "waiting";
+
+function kindOf(stage: Stage, card: Card, specsWithTickets: Set<number | undefined>, runningSpecs: Set<number | undefined>): Kind | undefined {
   const isTicket = card.spec !== undefined;
   if (stage === "build") {
     if (!isTicket && specsWithTickets.has(card.number)) return undefined;
@@ -42,7 +44,8 @@ function kindOf(stage: Stage, card: Card, specsWithTickets: Set<number | undefin
       case "waiting":
         return "running";
       default:
-        return "start-loop";
+        // The running loop reaches this Ticket by itself, and a second loop on one Spec would collide with it.
+        return isTicket && runningSpecs.has(card.spec) ? undefined : "start-loop";
     }
   }
   return (stage === "approve" || stage === "design" || stage === "spec" || stage === "request") && !isTicket ? stage : undefined;
@@ -52,8 +55,9 @@ function kindOf(stage: Stage, card: Card, specsWithTickets: Set<number | undefin
 export function nextStep(board: Board): NextStep {
   const cards = board.columns.flatMap(({ stage, cards }) => cards.map((card) => ({ stage, card })));
   const specsWithTickets = new Set(cards.map(({ card }) => card.spec));
+  const runningSpecs = new Set(cards.filter(({ card }) => isRunning(card)).map(({ card }) => card.spec));
   const actionable = cards.flatMap(({ stage, card }) => {
-    const kind = kindOf(stage, card, specsWithTickets);
+    const kind = kindOf(stage, card, specsWithTickets, runningSpecs);
     return kind === undefined ? [] : [{ kind, card }];
   });
   for (const kind of ORDER) {

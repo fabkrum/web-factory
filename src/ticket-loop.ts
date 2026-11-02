@@ -192,10 +192,11 @@ async function openSpecPullRequest(options: LoopOptions): Promise<SpecPullReques
       `Every Ticket of Spec #${spec} passed, but this Site repository has no remote called ${REMOTE}, so ${integration} cannot become a pull request. Connect the Site to GitHub, then run the Ticket loop again.`,
     );
   }
-  const pushedBefore = (await git(siteDir, "ls-remote", "--heads", REMOTE, `refs/heads/${integration}`)).split(/\s/)[0];
   const tip = (await git(siteDir, "rev-parse", integration)).trim();
+  let pushedBefore: string | undefined;
   // An explicit refspec, so the push can only ever move the integration branch on the remote.
   try {
+    pushedBefore = (await git(siteDir, "ls-remote", "--heads", REMOTE, `refs/heads/${integration}`)).split(/\s/)[0];
     await git(siteDir, "push", "--quiet", REMOTE, `refs/heads/${integration}:refs/heads/${integration}`);
   } catch (error) {
     throw new LoopError(`Every Ticket of Spec #${spec} passed, but pushing ${integration} to ${REMOTE} failed: ${(error as Error).message.trim()}`);

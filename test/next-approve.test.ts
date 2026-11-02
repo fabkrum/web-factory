@@ -192,6 +192,34 @@ describe("factory next", () => {
     expect(order).toEqual([approving, parked, ready, designed, specced, request, runningTicket]);
   });
 
+  it.each([
+    ["the lower Ticket", 0],
+    ["the higher Ticket", 1],
+  ])("names the running loop, never a second one, while %s is building and the other has not started", async (_, building) => {
+    const tracker = new FakeTracker();
+    const spec = inStage(tracker, "build");
+    const tickets = [tracker.addTicket(spec, "Home page"), tracker.addTicket(spec, "About page")];
+    const dir = kickedOffSite();
+    writeFile(dir, `.factory/spec-${spec}.json`, JSON.stringify({ tickets: { [tickets[building]!]: { status: "building", attempts: 1 } } }));
+
+    const step = await next(tracker, dir);
+
+    expect(step.action).toMatch(/Nothing to do while the Ticket loop runs/);
+    expect(step).toMatchObject({ issue: tickets[building] });
+  });
+
+  it("still starts the loop of another Spec while one Spec's loop runs", async () => {
+    const tracker = new FakeTracker();
+    const running = inStage(tracker, "build", "Running");
+    const ticket = tracker.addTicket(running, "Home page");
+    tracker.addTicket(running, "About page");
+    const other = tracker.addTicket(inStage(tracker, "build", "Other"), "Contact page");
+    const dir = kickedOffSite();
+    writeFile(dir, `.factory/spec-${running}.json`, JSON.stringify({ tickets: { [ticket]: { status: "building", attempts: 1 } } }));
+
+    expect(await next(tracker, dir)).toMatchObject({ issue: other });
+  });
+
   it("prints the action and the skill in plain words, and only --json as an option", async () => {
     const tracker = new FakeTracker();
     inStage(tracker, "approve");
@@ -216,6 +244,19 @@ describe("a Spec reaching Approve", () => {
 
     expect(tracker.issue(spec).labels).toEqual(["stage:approve"]);
     expect(await next(tracker, site)).toMatchObject({ skill: "approve", issue: spec });
+  });
+
+  it("says in plain words that the push failed when the remote cannot be reached", async () => {
+    const site = createSiteRepo({ testCommand: "true" });
+    const tracker = new FakeTracker();
+    const spec = inStage(tracker, "build");
+    tracker.addTicket(spec, "Home page");
+    git(site, "remote", "set-url", "origin", join(site, "no-such-remote"));
+
+    const run = await runFactory(["loop", String(spec)], { cwd: site, agentCli: new FakeAgentCli(buildsPage), tracker, host: new FakeHost() });
+
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr).toContain(`pushing spec/${spec} to origin failed`);
   });
 
   it("stays in Build while a Ticket is open, and a Spec's card leaves the action to its Tickets", async () => {
@@ -334,6 +375,47 @@ describe("factory approve change", () => {
     expect(again.exitCode, again.stderr).toBe(0);
     expect((await tracker.ticketsOf(spec)).filter((ticket) => ticket.state === "open")).toHaveLength(1);
     expect(tracker.issue(spec).labels).toEqual(["stage:build"]);
+  });
+
+  it("files each of several changes as its own Ticket, and all of them reach the same pull request", async () => {
+    const { site, tracker, host, spec, pullRequest } = await specInApprove();
+    await runFactory(["approve", "change", String(spec), change(site)], { cwd: site, tracker });
+
+    const second = await runFactory(["approve", "change", String(spec), change(site, { title: "Softer colors" })], { cwd: site, tracker });
+
+    expect(second.exitCode, second.stderr).toBe(0);
+    const open = (await tracker.ticketsOf(spec)).filter((ticket) => ticket.state === "open");
+    expect(open.map((ticket) => ticket.title)).toEqual(["Bigger headline", "Softer colors"]);
+    expect(tracker.issue(spec).labels).toEqual(["stage:build"]);
+
+    const rebuilt = await runFactory(["loop", String(spec)], { cwd: site, agentCli: new FakeAgentCli(buildsPage, buildsPage), tracker, host });
+
+    expect(rebuilt.exitCode, rebuilt.stderr).toBe(0);
+    expect(tracker.pullRequests).toHaveLength(1);
+    expect(pullRequest.body).toContain("Softer colors");
+    expect(tracker.issue(spec).labels).toEqual(["stage:approve"]);
+  });
+
+  it("files no second Ticket when a finished run is repeated", async () => {
+    const { site, tracker, spec } = await specInApprove();
+    await runFactory(["approve", "change", String(spec), change(site)], { cwd: site, tracker });
+
+    const again = await runFactory(["approve", "change", String(spec), change(site)], { cwd: site, tracker });
+
+    expect(again.exitCode, again.stderr).toBe(0);
+    expect((await tracker.ticketsOf(spec)).filter((ticket) => ticket.state === "open")).toHaveLength(1);
+  });
+
+  it("refuses a change to a Spec in Build that has no pull request", async () => {
+    const tracker = new FakeTracker();
+    const dir = createSiteRepo({ testCommand: "true" });
+    const spec = inStage(tracker, "build");
+
+    const run = await runFactory(["approve", "change", String(spec), change(dir)], { cwd: dir, tracker });
+
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr).toMatch(/not a Spec waiting in the Approve Stage/);
+    expect(await tracker.ticketsOf(spec)).toHaveLength(0);
   });
 
   it("refuses a change with nothing to check, or to a merged pull request, and files nothing", async () => {
