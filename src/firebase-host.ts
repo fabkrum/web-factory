@@ -9,9 +9,18 @@ import { buildSite, ServeError } from "./served-build.ts";
 /** The longest Firebase keeps a preview channel: a Spec may wait this long for Approve. */
 const PREVIEW_EXPIRES = "30d";
 const DEPLOY_TIMEOUT_MS = 15 * 60 * 1000;
+const INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
 const WORKFLOW = ".github/workflows/publish.yml";
 /** What `firebase init` writes when asked to deploy on merge; `factory publish` does that here. */
 const FIREBASE_MERGE_WORKFLOW = ".github/workflows/firebase-hosting-merge.yml";
+
+/** How a clean install runs from each lockfile; the first one a branch holds decides. */
+const CLEAN_INSTALLS: [lockfile: string, command: string, ...args: string[]][] = [
+  ["package-lock.json", "npm", "ci"],
+  ["pnpm-lock.yaml", "pnpm", "install", "--frozen-lockfile"],
+  ["yarn.lock", "yarn", "install", "--frozen-lockfile"],
+  ["bun.lock", "bun", "install", "--frozen-lockfile"],
+];
 
 export interface FirebaseHostOptions {
   /** The Firebase CLI, as a command and its first arguments. */
@@ -89,7 +98,7 @@ jobs:
 /**
  * Firebase Hosting, through its CLI. A Preview is a preview channel named after the branch,
  * deployed from the Builder's login; Publish runs on GitHub, from a workflow that uses the
- * service account `firebase init hosting:github` created, so no secret passes through the Builder.
+ * service account `firebase init hosting` created, so no secret passes through the Builder.
  */
 export class FirebaseHost implements Host {
   readonly #command: string[];
@@ -112,16 +121,17 @@ export class FirebaseHost implements Host {
   async deployPreview({ siteDir, branch }: { siteDir: string; branch: string }): Promise<string> {
     const config = await this.#siteConfig(siteDir);
     const channel = channelOf(branch);
-    // Inside the Site, so that the build finds the Site's node_modules; the Site itself stays on its branch.
+    // The Site itself stays on its branch. The install is the branch's own: a Spec may add a dependency.
     const worktree = join(siteDir, ".factory", "worktrees", `preview-${channel}`);
     await removeWorktree(siteDir, worktree);
     await mkdir(dirname(worktree), { recursive: true });
     await git(siteDir, "worktree", "add", "--quiet", "--detach", worktree, branch);
     try {
       await readFirebaseSetup(worktree);
+      await this.#install(worktree);
       await this.#build(worktree, config.buildCommand);
       const result = await this.#firebase(worktree, ["hosting:channel:deploy", channel, "--expires", PREVIEW_EXPIRES]);
-      const url = Object.values(result as Record<string, { url?: unknown }>)[0]?.url;
+      const url = Object.values((result ?? {}) as Record<string, { url?: unknown }>)[0]?.url;
       if (typeof url !== "string") throw new HostError(`Firebase deployed the Preview of ${branch} but named no address for it.`);
       return url;
     } finally {
@@ -143,6 +153,19 @@ export class FirebaseHost implements Host {
     } catch (error) {
       if (error instanceof ConfigError) throw new HostError(error.message);
       throw error;
+    }
+  }
+
+  async #install(dir: string): Promise<void> {
+    for (const [lockfile, command, ...args] of CLEAN_INSTALLS) {
+      if (!(await exists(join(dir, lockfile)))) continue;
+      const failed = await new Promise<string | undefined>((resolve) => {
+        execFile(command, args, { cwd: dir, env: this.#env, timeout: INSTALL_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 }, (error, _stdout, stderr) => {
+          resolve(error ? stderr.trim() || error.message : undefined);
+        });
+      });
+      if (failed !== undefined) throw new HostError(`The Preview could not install the Site's dependencies with \`${[command, ...args].join(" ")}\`: ${failed}`);
+      return;
     }
   }
 

@@ -101,7 +101,7 @@ An anonymised summary of Run reports that the Builder chooses to send to the Fac
 _Avoid_: telemetry, analytics, crash report
 
 **Preview**:
-A non-public copy of the Site that the Builder reads at Approve.
+An unlisted copy of the Site, reachable by anyone with its URL, that the Builder reads at Approve.
 _Avoid_: staging, draft
 
 **Approve**:

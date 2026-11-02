@@ -44,6 +44,9 @@ hostContract("the Firebase adapter against a fake Firebase CLI", async () => {
  * the maintainer's variable and secret; without them, or without the CLI, it is skipped.
  */
 const contractProject = process.env.WEB_FACTORY_FIREBASE_PROJECT;
+const contractSkip = realContractSkipReason();
+// The title alone shows in no default report, and the skip must say why.
+if (contractSkip) process.stderr.write(`The real Firebase contract is skipped: ${contractSkip}\n`);
 hostContract(
   "the Firebase adapter against a disposable Firebase project",
   async () => ({
@@ -51,7 +54,7 @@ hostContract(
     read: async (url) => (await fetch(url)).text(),
     prepareSite: (dir) => commitFirebaseSetup(dir, contractProject!),
   }),
-  { skip: realContractSkipReason(), timeout: 5 * 60_000 },
+  { skip: contractSkip, timeout: 5 * 60_000 },
 );
 
 function realContractSkipReason(): string | undefined {
@@ -96,6 +99,36 @@ describe("the Firebase adapter", () => {
     const url = await host.deployPreview({ siteDir: site, branch: "spec/1" });
 
     expect(await read(url)).toBe("the branch\n");
+  });
+
+  it("builds a Preview with a dependency only the branch has", async () => {
+    const { host, read } = fakeFirebase({ npm_config_cache: mkdtempSync(join(tmpdir(), "web-factory-npm-")) });
+    const site = createSiteRepo({ testCommand: "true", buildCommand: `mkdir -p dist && node -e "require('fs').writeFileSync('dist/index.html', require('only-on-branch'))"` });
+    commitFile(site, "firebase.json", `${JSON.stringify({ hosting: { public: "dist" } })}\n`);
+    commitFile(site, ".firebaserc", `${JSON.stringify({ projects: { default: "my-site" } })}\n`);
+    git(site, "checkout", "-q", "-b", "spec/1");
+    const dependency = "vendor/only-on-branch";
+    commitFile(site, `${dependency}/package.json`, `${JSON.stringify({ name: "only-on-branch", version: "1.0.0", main: "index.js" })}\n`);
+    commitFile(site, `${dependency}/index.js`, `module.exports = "from the dependency";\n`);
+    const root = { name: "a-site", version: "1.0.0", dependencies: { "only-on-branch": `file:${dependency}` } };
+    commitFile(site, "package.json", `${JSON.stringify(root)}\n`);
+    const packages = { "": root, "node_modules/only-on-branch": { resolved: dependency, link: true }, [dependency]: { version: "1.0.0" } };
+    commitFile(site, "package-lock.json", `${JSON.stringify({ name: root.name, version: root.version, lockfileVersion: 3, requires: true, packages })}\n`);
+    git(site, "checkout", "-q", "main");
+
+    const url = await host.deployPreview({ siteDir: site, branch: "spec/1" });
+
+    expect(await read(url)).toBe("from the dependency");
+  });
+
+  it("says plainly when the Preview's dependencies cannot be installed", async () => {
+    const { host } = fakeFirebase({ npm_config_cache: mkdtempSync(join(tmpdir(), "web-factory-npm-")) });
+    const site = firebaseSite();
+    commitFile(site, "package.json", `${JSON.stringify({ name: "a-site", version: "1.0.0" })}\n`);
+    commitFile(site, "package-lock.json", "not a lockfile\n");
+    git(site, "branch", "spec/1");
+
+    await expect(host.deployPreview({ siteDir: site, branch: "spec/1" })).rejects.toThrow(/could not install the Site's dependencies with `npm ci`/);
   });
 
   it("publishes to the site named in firebase.json when it names one", async () => {
@@ -157,6 +190,17 @@ describe("the Firebase adapter", () => {
     writeFile(site, ".github/workflows/firebase-hosting-merge.yml", "name: Deploy\n");
 
     await expect(host.connect({ siteDir: site, baseBranch: "main" })).rejects.toThrow(/firebase-hosting-merge\.yml/);
+  });
+});
+
+describe("the host contract workflow", () => {
+  it("writes no key without the secret, and says why the test is skipped", () => {
+    const workflow = readFileSync(fileURLToPath(new URL("../.github/workflows/host-contract.yml", import.meta.url)), "utf8");
+    const guard = workflow.indexOf('[ -z "$SERVICE_ACCOUNT" ]');
+
+    expect(guard).toBeGreaterThan(-1);
+    expect(workflow.indexOf("firebase-key.json")).toBeGreaterThan(guard);
+    expect(workflow).toContain("::notice");
   });
 });
 

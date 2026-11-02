@@ -277,6 +277,17 @@ describe("factory kickoff", () => {
     expect(run.stderr).toMatch(/setup/);
   });
 
+  it.each(["firebase-app-hosting", "Firebase Functions", "Netlify (not Firebase)"])("asks %s for its own setup: only Firebase Hosting has an adapter", async (chosen) => {
+    const site = newSite();
+    const option = { name: chosen, for: "Fits", against: "No adapter" };
+    const host = { ...decisions().host, chosen, options: [...decisions().host.options, option] };
+
+    const run = await kickoff(site, decisions({ host }));
+
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr).toMatch(/setup/);
+  });
+
   it.each([
     ["a line break", "Connect it in the dashboard.\n"],
     ["a space", "Connect it in the dashboard. "],

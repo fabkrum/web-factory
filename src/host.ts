@@ -21,9 +21,10 @@ export interface Host {
 export class HostError extends Error {}
 
 /**
- * Whether the host named at Kickoff is the one the Firebase adapter serves. Firebase App
- * Hosting is not: it rolls out one live branch and has no preview channels.
+ * Whether the host named at Kickoff is the one the Firebase adapter serves: "Firebase" or
+ * "Firebase Hosting", and nothing else. Firebase App Hosting is not: it rolls out one live
+ * branch and has no preview channels.
  */
 export function isFirebaseHosting(host: string): boolean {
-  return /firebase/i.test(host) && !/app\s*hosting/i.test(host);
+  return /^\s*firebase([\s_-]+hosting)?\s*$/i.test(host);
 }
