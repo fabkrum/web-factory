@@ -27,11 +27,13 @@ Use the format's YAML front matter and the sections Overview, Colors, Typography
 
 ## 3. Make the handoff
 
+The images, fonts and video in the export go to `design/assets`, where the Site may use them. Ask the Builder whether they may use each one, and delete from the export the ones they may not.
+
 ```sh
 npx factory design import claude-design <number> <design-link>
 ```
 
-The link is optional. The command unpacks a downloaded `.zip`, checks DESIGN.md, opens the pages in a browser for a reference screenshot of each route, keeps them in `design/reference`, writes the record `design/source.json`, and commits the folder. Run `git push` afterwards. The pages stay reference only: never copy them into the Site.
+The link is optional. The command unpacks a downloaded `.zip`, checks DESIGN.md, opens the pages in a browser for a reference screenshot of each route, keeps them in `design/reference`, puts their images, fonts and video in `design/assets`, writes the record `design/source.json`, and commits the folder. Run `git push` afterwards. The pages stay reference only: never copy them into the Site.
 
 If it refuses, it says why. If a color must change, tell the Builder why; they decide. Change it in DESIGN.md and ask them to change it in Claude Design too.
 

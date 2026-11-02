@@ -28,7 +28,7 @@ Once the Builder confirms, `factory spec confirm <spec>` moves the Spec to the D
 
 ## Design
 
-Every design ends as the Design handoff, the committed folder `design/`: `DESIGN.md` (the source of the design), `tokens.json` (DTCG tokens generated from it), `screenshots/` (a reference screenshot per route), `sample/` or `reference/` (the sample page, or a design tool's code: reference only, never copied into the Site), `assets/` (a tool's images, which the Site may use) and `source.json` (the provenance record: tool, how it was made, where it was fetched from, Spec, format version, date, routes).
+Every design ends as the Design handoff, the committed folder `design/`: `DESIGN.md` (the source of the design), `tokens.json` (DTCG tokens generated from it), `screenshots/` (a reference screenshot per route), `sample/` or `reference/` (the sample page, or a design tool's code: reference only, never copied into the Site), `assets/` (a tool's images, fonts and video, which the Site may use) and `source.json` (the provenance record: tool, how it was made, where it was fetched from, Spec, format version, date, routes).
 
 Without a design tool, the `design` skill writes `design/DESIGN.md` and a sample page from the Spec, and `factory design <spec>` makes the rest and commits it. It refuses a DESIGN.md that fails its lint or its contrast check, or that does not name the pinned format version, and changes nothing then. The contrast check counts a warning from the linter as a failure and needs at least one component with both a background and a text color, since it could otherwise measure nothing. The linter cannot measure a see-through color, so a component's text or background color must be solid.
 

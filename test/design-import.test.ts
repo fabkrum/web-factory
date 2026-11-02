@@ -111,6 +111,9 @@ describe("factory design import", () => {
     expect(String(provenance(site).how)).toMatch(/downloaded by hand/);
     expect(tracked(site)).toEqual(expect.arrayContaining(["design/reference/Landing.html", "design/reference/style.css"]));
     expect(tracked(site).some((file) => file.endsWith(".zip"))).toBe(false);
+    expect(tracked(site)).toEqual(expect.arrayContaining(["design/reference/images/logo.png", "design/assets/images/logo.png"]));
+    expect(readFileSync(`${site}/design/assets/images/logo.png`)).toEqual(readFileSync(`${site}/design/reference/images/logo.png`));
+    expect(tracked(site).filter((file) => file.startsWith("design/assets/"))).toEqual(["design/assets/images/logo.png"]);
     const pictures = provenance(site).routes.map((route) => readFileSync(`${site}/design/screenshots/${route === "/Landing.html" ? "_4c_anding.html" : "_41_bout.html"}.png`).toString("base64"));
     expect(new Set(pictures).size).toBe(2);
   });
@@ -125,6 +128,22 @@ describe("factory design import", () => {
     expectSameFolderShape(site, ["/"]);
     expect(provenance(site)).toMatchObject({ source: "https://claude.ai/design/p/1" });
     expect(String(provenance(site).how)).toMatch(/Claude Code/);
+    expect(existsSync(`${site}/design/assets`)).toBe(false);
+  });
+
+  it("puts only a Claude Design export's assets in design/assets, and no folder when it has none", async () => {
+    const { site, tracker, spec } = siteInDesign({ agentCli: "claude-code" });
+    const folder = exportFolder(site, "claude-design");
+    writeFile(folder, "index.html", `<!doctype html><html lang="en"><title>Home</title><h1>Home</h1></html>`);
+    writeFile(folder, "notes.md", "Notes from the tool");
+    writeFile(folder, "fonts/Brand.WOFF2", "font");
+    writeFile(folder, "__MACOSX/._logo.png", "what macOS adds");
+
+    const run = await runFactory(["design", "import", "claude-design", String(spec)], { cwd: site, tracker });
+
+    expect(run.exitCode, run.stderr).toBe(0);
+    expect(tracked(site).filter((file) => file.startsWith("design/assets/"))).toEqual(["design/assets/fonts/Brand.WOFF2"]);
+    expect(String(provenance(site).how)).toMatch(/design\/assets/);
   });
 
   it("gives Claude Design under another Agent CLI one explained manual step", async () => {

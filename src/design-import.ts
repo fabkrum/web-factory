@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { cp, lstat, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
-import { extname, join, relative } from "node:path";
+import { dirname, extname, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import type { Clock } from "./clock.ts";
 import { readAgentCliChoice } from "./config.ts";
@@ -122,6 +122,19 @@ async function copyDesignFiles(from: string, to: string): Promise<void> {
   });
 }
 
+/** What in a tool's folder a Site may use: images, fonts and video, and so never code or notes. */
+const ASSET_FILE = /\.(png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|otf|mp4|webm)$/iu;
+
+/** Copies the assets out of a folder of pages, each at the same path it has there, so links between them still fit. */
+async function copyAssets(pages: string, to: string): Promise<void> {
+  for (const entry of await readdir(pages, { recursive: true, withFileTypes: true })) {
+    const file = relative(pages, join(entry.parentPath, entry.name));
+    if (!entry.isFile() || !ASSET_FILE.test(file) || file.split(sep).some(isNoise)) continue;
+    await mkdir(dirname(join(to, file)), { recursive: true });
+    await cp(join(pages, file), join(to, file));
+  }
+}
+
 /** Stitch and Figma give the pictures and code: the handoff takes them as they are. */
 async function importScreens(siteDir: string, folder: string, screens: Screen[], codeExtension: string): Promise<string[]> {
   await checkPictures(folder, screens);
@@ -174,13 +187,14 @@ async function startPage(pages: string, folder: string): Promise<string> {
   throw refuse(`The Claude Design export in ${folder} has no index.html, so there is no telling which page comes first. Name the first page index.html, then run this again.`);
 }
 
-/** Claude Design gives pages, not pictures, so its pages go to reference and the pictures are taken from them. */
+/** Claude Design gives pages, not pictures, so its pages go to reference, whole so that they still show their images, and the pictures are taken from them. Its assets go to the same place as any tool's. */
 async function importClaudeDesign(siteDir: string, folder: string): Promise<{ routes: string[]; manual: boolean }> {
   const manual = (await readdir(folder)).some((name) => extname(name) === ".zip");
   const pages = await claudeDesignPages(folder);
   const start = await startPage(pages, folder);
   await clearEarlierDesign(siteDir);
   await copyDesignFiles(pages, join(siteDir, REFERENCE_FOLDER));
+  await copyAssets(pages, join(siteDir, ASSETS_FOLDER));
   return { routes: await takeScreenshots(siteDir, REFERENCE_FOLDER, start === "index.html" ? "" : start), manual };
 }
 
@@ -204,7 +218,7 @@ export async function runDesignImport(options: { siteDir: string; tool: ImportTo
     if (await isEmptyFolder(folder)) await noClaudeDesignExport(siteDir, folder);
     const design = await readPassingDesign(siteDir);
     const { routes, manual } = await importClaudeDesign(siteDir, folder);
-    const how = `The Claude Design export was ${manual ? "downloaded by hand" : "fetched by Claude Code"} and DESIGN.md written from it; its pages are kept in design/reference as reference only.`;
+    const how = `The Claude Design export was ${manual ? "downloaded by hand" : "fetched by Claude Code"} and DESIGN.md written from it; its pages are kept in design/reference as reference only, and their images and fonts in design/assets.`;
     await finishHandoff({ siteDir, design, provenance: { tool, how, source: source ?? (manual ? "a file downloaded from Claude Design" : "Claude Design"), spec, routes }, clock, stdout });
     return;
   }
