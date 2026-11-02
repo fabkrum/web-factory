@@ -26,8 +26,8 @@ export interface UpdateOptions {
 
 /**
  * Brings the newest Factory release into the Site as a pull request. All of it happens in a
- * throwaway worktree of what is on GitHub and on a branch only `origin` holds, so the Builder's
- * folder and base branch stay as they are until they merge.
+ * throwaway worktree of what is on GitHub and on a branch only `origin` holds, so the base branch
+ * stays as it is until they merge, and the Builder's folder until they pull that merge.
  */
 export async function runUpdate({ siteDir, tracker, releases, stdout }: UpdateOptions): Promise<void> {
   const { baseBranch } = await readSiteConfig(siteDir);
@@ -62,11 +62,10 @@ export async function runUpdate({ siteDir, tracker, releases, stdout }: UpdateOp
     const files = await bringFiles(worktree, from, to);
     await releases.pin(worktree, latest);
     await commitAll(worktree, `Update the Factory to ${latest}`);
-    // The branch is the Factory's own: anything on it is an older update this one replaces.
-    await git(worktree, "push", "--quiet", "--force", REMOTE, `HEAD:refs/heads/${UPDATE_BRANCH}`);
-
     const body = await pullRequestBody({ pinned, latest, from, to, files, worktree });
-    const pullRequest = await publish(tracker, open, baseBranch, body);
+    // The branch is the Factory's own: anything on it is an older update this one replaces.
+    const push = () => git(worktree, "push", "--quiet", "--force", REMOTE, `HEAD:refs/heads/${UPDATE_BRANCH}`);
+    const pullRequest = await publish(tracker, open, baseBranch, body, push);
     stdout(`Pull request #${pullRequest.number} lists what this update changes: ${pullRequest.url}\nNothing in your Site changes until you merge it; merging it is how you approve the update.\n`);
   } finally {
     await rm(work, { recursive: true, force: true });
@@ -74,9 +73,19 @@ export async function runUpdate({ siteDir, tracker, releases, stdout }: UpdateOp
   }
 }
 
-async function publish(tracker: Tracker, open: PullRequest | undefined, base: string, body: string): Promise<PullRequest> {
-  if (!open) return tracker.openPullRequest({ head: UPDATE_BRANCH, base, title: "Update the Factory", body });
+/**
+ * Publishes the branch and its body so that a run stopped halfway is finished by running it again.
+ * The rerun only sees the branch's pin, so an open pull request's branch moves last: once it holds
+ * the newest release, the body already says so. A new pull request needs its branch first, and a
+ * rerun finds no pull request and starts over.
+ */
+async function publish(tracker: Tracker, open: PullRequest | undefined, base: string, body: string, push: () => Promise<unknown>): Promise<PullRequest> {
+  if (!open) {
+    await push();
+    return tracker.openPullRequest({ head: UPDATE_BRANCH, base, title: "Update the Factory", body });
+  }
   await tracker.updatePullRequest(open.number, { body });
+  await push();
   return open;
 }
 
@@ -212,7 +221,23 @@ async function pullRequestBody(update: { pinned: string; latest: string; from: R
     "",
     "## After you merge",
     "",
-    "Run `npm install` in your Site's folder. It puts the new Factory on your computer. You should see a short summary of added or changed packages.",
+    "The merge happens on GitHub, so your computer does not have the update yet. Two steps bring it there, both in your Site's folder.",
+    "",
+    "First bring the merged files from GitHub into your folder:",
+    "",
+    "```sh",
+    "git pull",
+    "```",
+    "",
+    "You should see a list of changed files, with `package.json` among them.",
+    "",
+    "Then install the new Factory, because `package.json` now names it and npm fetches what that file names:",
+    "",
+    "```sh",
+    "npm install",
+    "```",
+    "",
+    "You should see a short summary of added or changed packages.",
     ...(formatMoved && hasDesign ? ["", `Your ${DESIGN_FILE} is written in format ${from.designFormat}. Until it is rewritten in format ${to.designFormat}, its Review check fails: ask the design skill to rewrite it.`] : []),
     "",
   ].join("\n");

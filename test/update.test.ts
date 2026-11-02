@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { REVIEW_CHECKS } from "../src/review/review.ts";
 import { DESIGN_FORMAT_VERSION } from "../src/design-handoff.ts";
 import { NpmReleases } from "../src/releases.ts";
+import { PipelineError } from "../src/request.ts";
 import { FakeAgentCli } from "./harness/fake-agent-cli.ts";
 import { FakeReleases } from "./harness/fake-releases.ts";
 import { FakeTracker } from "./harness/fake-tracker.ts";
@@ -83,6 +84,19 @@ describe("factory update", () => {
     expect(onBranch(site, SKILL)).toBe("cut thinner");
     expect(onBranch(site, ".agents/skills/fresh/SKILL.md")).toBe("new");
     expect(branchHas(site, ".agents/skills/gone/SKILL.md")).toBe(false);
+  });
+
+  it("says how the merged update reaches the Builder's computer: first the pull, then the install", async () => {
+    const site = siteOn({});
+
+    await runFactory(["update"], { cwd: site, tracker, releases: new FakeReleases("1.1.0", { "1.0.0": {}, "1.1.0": {} }) });
+
+    const after = tracker.pullRequests[0]!.body.split("## After you merge")[1]!;
+    expect(after).toMatch(/happens on GitHub/);
+    const [pull, install] = after.split("```sh\nnpm install\n```");
+    expect(pull).toContain("```sh\ngit pull\n```\n\nYou should see");
+    expect(pull).toMatch(/because `package\.json` now names it/);
+    expect(install).toMatch(/You should see/);
   });
 
   it("changes nothing in the Site without the merge", async () => {
@@ -203,6 +217,40 @@ describe("factory update", () => {
     await runFactory(["update"], { cwd: site, tracker, releases: newer });
 
     expect(tracker.pullRequests).toHaveLength(1);
+    expect(tracker.pullRequests[0]!.body).toContain("Factory: 1.0.0 → 1.2.0");
+    expect(JSON.parse(onBranch(site, "package.json")).devDependencies["@fabkrum/web-factory"]).toBe("1.2.0");
+  });
+
+  it("finishes moving its pull request on when GitHub refused the new list", async () => {
+    const site = siteOn({});
+    await runFactory(["update"], { cwd: site, tracker, releases: new FakeReleases("1.1.0", { "1.0.0": {}, "1.1.0": {} }) });
+    const newer = new FakeReleases("1.2.0", { "1.0.0": {}, "1.1.0": {}, "1.2.0": {} });
+    vi.spyOn(tracker, "updatePullRequest").mockRejectedValueOnce(new PipelineError("GitHub is not answering."));
+
+    const stopped = await runFactory(["update"], { cwd: site, tracker, releases: newer });
+    expect(stopped.exitCode).toBe(1);
+    const again = await runFactory(["update"], { cwd: site, tracker, releases: newer });
+
+    expect(again.exitCode).toBe(0);
+    expect(tracker.pullRequests).toHaveLength(1);
+    expect(tracker.pullRequests[0]!.body).toContain("Factory: 1.0.0 → 1.2.0");
+    expect(JSON.parse(onBranch(site, "package.json")).devDependencies["@fabkrum/web-factory"]).toBe("1.2.0");
+  });
+
+  it("finishes moving its pull request on when the push was refused", async () => {
+    const site = siteOn({});
+    await runFactory(["update"], { cwd: site, tracker, releases: new FakeReleases("1.1.0", { "1.0.0": {}, "1.1.0": {} }) });
+    const newer = new FakeReleases("1.2.0", { "1.0.0": {}, "1.1.0": {}, "1.2.0": {} });
+    const hook = join(git(site, "remote", "get-url", "origin"), "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\nexit 1\n");
+    chmodSync(hook, 0o755);
+
+    const stopped = await runFactory(["update"], { cwd: site, tracker, releases: newer });
+    expect(stopped.exitCode).not.toBe(0);
+    rmSync(hook);
+    const again = await runFactory(["update"], { cwd: site, tracker, releases: newer });
+
+    expect(again.exitCode).toBe(0);
     expect(tracker.pullRequests[0]!.body).toContain("Factory: 1.0.0 → 1.2.0");
     expect(JSON.parse(onBranch(site, "package.json")).devDependencies["@fabkrum/web-factory"]).toBe("1.2.0");
   });
