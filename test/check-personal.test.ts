@@ -35,7 +35,12 @@ describe("the check for anything personal", () => {
     ["the maintainer's name", "Ask Fabian about this."],
     ["the maintainer's account", "See github.com/fabkrum/other-repository, it is fabkrum's."],
     ["a mail address", "fabian.krumbholz@example.com"],
+    ["a longer name beginning like the private repository", "Clone fabkrum/web-factory-private."],
+    ["a longer scoped name", "Install @fabkrum/web-factory-secrets."],
+    ["the repository's wiki", "See fabkrum/web-factory.wiki for that."],
     ["a home path", "cd /Users/someone/projects"],
+    ["the maintainer's agent folder", "Read ~/.claude-personal/CLAUDE.md first."],
+    ["the maintainer's projects folder", "It lives in ~/ai-projects/personal/x."],
     ["Speed Kit", "Works like Speed Kit does."],
     ["Speed Kit in one word", "speedkit-config"],
     ["an fk: skill", "Run fk:write-guide first."],
@@ -43,6 +48,7 @@ describe("the check for anything personal", () => {
     ["launchd", "A launchd job starts it."],
     ["caffeinate", "Run it under caffeinate."],
     ["the operator attestation", "Sign the operator attestation."],
+    ["the operator attestation as an identifier", "const operatorAttestation = sign();"],
   ])("fails on %s, and says where", (_name, line) => {
     track("notes.md", `A clean line.\n${line}\n`);
 
@@ -57,8 +63,10 @@ describe("the check for anything personal", () => {
     expect(check(repository).status).toBe(1);
   });
 
-  it("passes the public names, the licence's holder and WebAuthn's attestation", () => {
+  it("passes the public names, the Factory's own home folder, the licence's holder and WebAuthn's attestation", () => {
     track("package.md", "Install @fabkrum/web-factory from github.com/fabkrum/web-factory, as fabkrum-web-factory-1.0.0.tgz.\n");
+    track("template.md", "Start from github.com/fabkrum/web-factory-template or github.com/fabkrum/web-factory/issues.\n");
+    track("home.md", "The Factory keeps its login in ~/.web-factory.\n");
     track("LICENSE", "Copyright (c) 2026 Fabian Krumbholz\n");
     track("passkeys.md", "The Authenticator Attestation GUID.\n");
 

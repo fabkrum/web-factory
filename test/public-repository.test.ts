@@ -41,7 +41,7 @@ describe("the Codespaces template", () => {
 });
 
 describe("the Factory repository", () => {
-  it("has a bug report template asking what a workshop attendee can answer", () => {
+  it("has a bug report template asking what a Builder can answer", () => {
     const template = read(".github/ISSUE_TEMPLATE/bug_report.yml");
     expect(template).toMatch(/^name: Bug report$/m);
     expect(template).toMatch(/^description: \S/m);
