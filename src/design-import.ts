@@ -125,11 +125,16 @@ async function copyDesignFiles(from: string, to: string): Promise<void> {
 /** What in a tool's folder a Site may use: images, fonts and video, and so never code or notes. */
 const ASSET_FILE = /\.(png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|otf|mp4|webm)$/iu;
 
+/** The assets in a folder of pages, each as its path inside that folder. */
+async function assetFiles(pages: string): Promise<string[]> {
+  const entries = await readdir(pages, { recursive: true, withFileTypes: true });
+  const files = entries.filter((entry) => entry.isFile()).map((entry) => relative(pages, join(entry.parentPath, entry.name)));
+  return files.filter((file) => ASSET_FILE.test(file) && !file.split(sep).some(isNoise)).sort();
+}
+
 /** Copies the assets out of a folder of pages, each at the same path it has there, so links between them still fit. */
 async function copyAssets(pages: string, to: string): Promise<void> {
-  for (const entry of await readdir(pages, { recursive: true, withFileTypes: true })) {
-    const file = relative(pages, join(entry.parentPath, entry.name));
-    if (!entry.isFile() || !ASSET_FILE.test(file) || file.split(sep).some(isNoise)) continue;
+  for (const file of await assetFiles(pages)) {
     await mkdir(dirname(join(to, file)), { recursive: true });
     await cp(join(pages, file), join(to, file));
   }
@@ -165,16 +170,37 @@ async function noClaudeDesignExport(siteDir: string, folder: string): Promise<ne
   );
 }
 
-/** Unpacks a downloaded bundle into its folder, and finds the folder of pages inside. */
-async function claudeDesignPages(folder: string): Promise<string> {
-  for (const zip of (await readdir(folder)).filter((name) => extname(name) === ".zip")) {
+/**
+ * Unpacks a downloaded bundle into its folder and removes the download, so that a file deleted from
+ * what came out stays deleted. Returns whether there was one.
+ */
+async function unpackDownloads(folder: string): Promise<boolean> {
+  const zips = (await readdir(folder)).filter((name) => extname(name) === ".zip");
+  for (const zip of zips) {
     await promisify(execFile)("unzip", ["-oq", `./${zip}`], { cwd: folder }).catch(() => {
       throw refuse(`${folder}/${zip} could not be unpacked. Download it from Claude Design again; if this keeps happening, install the unzip command.`);
     });
+    await rm(join(folder, zip));
   }
-  const entries = (await readdir(folder, { withFileTypes: true })).filter((entry) => extname(entry.name) !== ".zip" && !isNoise(entry.name));
+  return zips.length > 0;
+}
+
+/** The folder of pages in an export: the one folder it holds, or else the export itself. */
+async function claudeDesignPages(folder: string): Promise<string> {
+  const entries = (await readdir(folder, { withFileTypes: true })).filter((entry) => !isNoise(entry.name));
   const [only] = entries;
   return entries.length === 1 && only!.isDirectory() ? join(folder, only!.name) : folder;
+}
+
+/** A download has not been through the Builder yet, so the import stops here: what they may not use must leave the folder before anything reaches the handoff. */
+async function stopAfterUnpacking(siteDir: string, folder: string): Promise<never> {
+  const pages = await claudeDesignPages(folder);
+  const shown = relative(siteDir, pages);
+  const assets = await assetFiles(pages);
+  const question = assets.length === 0
+    ? "It holds no images, fonts or video."
+    : `These files would go to design/assets, where the Site may use them: ${assets.join(", ")}. Ask the Builder whether they may use each one, and delete from that folder the ones they may not.`;
+  throw refuse(`The download is unpacked in ${shown} and the .zip file is gone, but nothing is imported yet. ${question} Then run this same command again.`);
 }
 
 /** The page to start from: index.html, or else the only page no other page links to. */
@@ -188,14 +214,13 @@ async function startPage(pages: string, folder: string): Promise<string> {
 }
 
 /** Claude Design gives pages, not pictures, so its pages go to reference, whole so that they still show their images, and the pictures are taken from them. Its assets go to the same place as any tool's. */
-async function importClaudeDesign(siteDir: string, folder: string): Promise<{ routes: string[]; manual: boolean }> {
-  const manual = (await readdir(folder)).some((name) => extname(name) === ".zip");
+async function importClaudeDesign(siteDir: string, folder: string): Promise<string[]> {
   const pages = await claudeDesignPages(folder);
   const start = await startPage(pages, folder);
   await clearEarlierDesign(siteDir);
   await copyDesignFiles(pages, join(siteDir, REFERENCE_FOLDER));
   await copyAssets(pages, join(siteDir, ASSETS_FOLDER));
-  return { routes: await takeScreenshots(siteDir, REFERENCE_FOLDER, start === "index.html" ? "" : start), manual };
+  return takeScreenshots(siteDir, REFERENCE_FOLDER, start === "index.html" ? "" : start);
 }
 
 const HOW: Record<Exclude<ImportTool, "claude-design">, string> = {
@@ -216,8 +241,10 @@ export async function runDesignImport(options: { siteDir: string; tool: ImportTo
 
   if (tool === "claude-design") {
     if (await isEmptyFolder(folder)) await noClaudeDesignExport(siteDir, folder);
+    if (await unpackDownloads(folder)) await stopAfterUnpacking(siteDir, folder);
     const design = await readPassingDesign(siteDir);
-    const { routes, manual } = await importClaudeDesign(siteDir, folder);
+    const routes = await importClaudeDesign(siteDir, folder);
+    const manual = (await readAgentCliChoice(siteDir)) !== "claude-code";
     const how = `The Claude Design export was ${manual ? "downloaded by hand" : "fetched by Claude Code"} and DESIGN.md written from it; its pages are kept in design/reference as reference only, and their images and fonts in design/assets.`;
     await finishHandoff({ siteDir, design, provenance: { tool, how, source: source ?? (manual ? "a file downloaded from Claude Design" : "Claude Design"), spec, routes }, clock, stdout });
     return;

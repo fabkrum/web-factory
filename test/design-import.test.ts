@@ -62,6 +62,13 @@ function saveClaudeDesignZip(site: string): void {
   cpSync(join(EXPORTS, "claude-design.zip"), join(exportFolder(site, "claude-design"), "design.zip"));
 }
 
+/** The run that unpacks a download and stops, as it does before anything of a download is imported. */
+async function unpackClaudeDesignZip(site: string, tracker: FakeTracker, spec: number): Promise<string> {
+  const run = await runFactory(["design", "import", "claude-design", String(spec)], { cwd: site, tracker });
+  expect(run.stderr).toMatch(/nothing is imported yet/);
+  return run.stderr;
+}
+
 const provenance = (site: string) => JSON.parse(readFileSync(`${site}/design/source.json`, "utf8")) as Record<string, unknown> & { routes: string[] };
 const tracked = (site: string) => git(site, "ls-files", "design").split("\n");
 
@@ -102,6 +109,7 @@ describe("factory design import", () => {
   it("fills the same folder from a Claude Design zip, taking the pictures itself", async () => {
     const { site, tracker, spec } = siteInDesign({ agentCli: "codex" });
     saveClaudeDesignZip(site);
+    await unpackClaudeDesignZip(site, tracker, spec);
 
     const run = await runFactory(["design", "import", "claude-design", String(spec)], { cwd: site, tracker });
 
@@ -116,6 +124,38 @@ describe("factory design import", () => {
     expect(tracked(site).filter((file) => file.startsWith("design/assets/"))).toEqual(["design/assets/images/logo.png"]);
     const pictures = provenance(site).routes.map((route) => readFileSync(`${site}/design/screenshots/${route === "/Landing.html" ? "_4c_anding.html" : "_41_bout.html"}.png`).toString("base64"));
     expect(new Set(pictures).size).toBe(2);
+  });
+
+  it("stops after unpacking a download, so the Builder decides on its assets before anything is imported", async () => {
+    const { site, tracker, spec } = siteInDesign({ agentCli: "codex" });
+    saveClaudeDesignZip(site);
+
+    const run = await runFactory(["design", "import", "claude-design", String(spec)], { cwd: site, tracker });
+
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr).toMatch(/images\/logo\.png/);
+    expect(run.stderr).toMatch(/may use/);
+    expect(existsSync(`${site}/design/assets`)).toBe(false);
+    expect(existsSync(`${site}/design/source.json`)).toBe(false);
+    expect(readdirSync(exportFolder(site, "claude-design")).some((name) => name.endsWith(".zip"))).toBe(false);
+  });
+
+  it("keeps a file the Builder may not use out of the handoff, also after a refused run", async () => {
+    const { site, tracker, spec } = siteInDesign({ agentCli: "codex" });
+    saveClaudeDesignZip(site);
+    const unpacked = await unpackClaudeDesignZip(site, tracker, spec);
+    const unpackedFolder = join(site, /unpacked in (\S+) and/u.exec(unpacked)![1]!);
+    rmSync(join(unpackedFolder, "images/logo.png"));
+
+    writeFile(site, "design/DESIGN.md", "Not a design yet");
+    const refused = await runFactory(["design", "import", "claude-design", String(spec)], { cwd: site, tracker });
+    expect(refused.exitCode).toBe(1);
+    writeFile(site, "design/DESIGN.md", DESIGN);
+    const run = await runFactory(["design", "import", "claude-design", String(spec)], { cwd: site, tracker });
+
+    expect(run.exitCode, run.stderr).toBe(0);
+    expect(tracked(site).some((file) => file.endsWith("logo.png"))).toBe(false);
+    expect(String(provenance(site).how)).toMatch(/downloaded by hand/);
   });
 
   it("takes a folder Claude Code put there itself, and says so", async () => {
