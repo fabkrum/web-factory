@@ -45,6 +45,27 @@ export function trackerContract(
       expect(await tracker.getIssue(spec)).toMatchObject({ number: spec, title: `Spec ${run}`, state: "open", labels: ["stage:spec"] });
     });
 
+    it("rewrites an issue when a Request becomes its Spec, and it stays the same issue", async () => {
+      const { tracker } = await subject();
+      const request = await tracker.createIssue({ title: `Request ${run}`, body: "My words.", stage: "request" });
+
+      await tracker.updateIssue(request, { title: `Spec ${run}`, body: "Worked out." });
+
+      expect(await tracker.getIssue(request)).toMatchObject({ number: request, title: `Spec ${run}`, body: "Worked out.", state: "open", labels: ["stage:request"] });
+    });
+
+    it("takes a dropped Ticket out of its Spec and closes it", async () => {
+      const { tracker } = await subject();
+      const spec = await tracker.createIssue({ title: `Spec ${run}`, body: "", stage: "spec" });
+      const kept = await tracker.createIssue({ title: `Kept ${run}`, body: "", stage: "spec", parent: spec });
+      const dropped = await tracker.createIssue({ title: `Dropped ${run}`, body: "", stage: "spec", parent: spec });
+
+      await tracker.removeTicket(spec, dropped);
+
+      expect((await tracker.ticketsOf(spec)).map((ticket) => ticket.number)).toEqual([kept]);
+      expect((await tracker.getIssue(dropped)).state).toBe("closed");
+    });
+
     it("records blockers and shows them on the blocked Ticket", async () => {
       const { tracker } = await subject();
       const spec = await tracker.createIssue({ title: `Spec ${run}`, body: "", stage: "spec" });

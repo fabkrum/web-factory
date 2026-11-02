@@ -57,6 +57,9 @@ export class FakeGitHub {
 
   readonly gh: Gh = async (args, { input }) => this.#run(args, input);
 
+  /** While true, `gh` answers as it does before the Builder logs in. */
+  loggedOut = false;
+
   /** Pushes a branch to the fake remote, so a pull request can be opened from it. */
   pushBranch(name: string): void {
     this.#branches.add(name);
@@ -82,6 +85,7 @@ export class FakeGitHub {
   }
 
   #run(args: string[], input: string | undefined): string {
+    if (this.loggedOut) throw new Error("To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.");
     if (args[0] === "repo" && args[1] === "view") return `${this.repo}\n`;
     if (args[0] !== "api") throw new Error(`fake gh does not know "gh ${args.join(" ")}"`);
 
@@ -155,6 +159,8 @@ export class FakeGitHub {
       if (body.state === "closed" && issue.state === "open") issue.timeline.push({ event: "closed" });
       if (body.state === "open" && issue.state === "closed") issue.timeline.push({ event: "reopened" });
       if (body.state === "open" || body.state === "closed") issue.state = body.state;
+      if (typeof body.title === "string") issue.title = body.title;
+      if (typeof body.body === "string") issue.body = body.body;
       return this.#issueJson(issue);
     }
     if ((match = route.match(/^PUT issues\/(\d+)\/labels$/))) {
@@ -176,6 +182,13 @@ export class FakeGitHub {
       if (!parent.subIssues.includes(child.number)) parent.subIssues.push(child.number);
       parent.timeline.push({ event: "sub_issue_added" });
       return this.#issueJson(parent);
+    }
+    if ((match = route.match(/^DELETE issues\/(\d+)\/sub_issue$/))) {
+      const parent = this.#issue(Number(match[1]));
+      const child = this.#issueById(body.sub_issue_id);
+      if (!parent.subIssues.includes(child.number)) throw new HttpError(404, "Not Found");
+      parent.subIssues = parent.subIssues.filter((number) => number !== child.number);
+      return this.#issueJson(child);
     }
     if ((match = route.match(/^GET issues\/(\d+)\/sub_issues$/))) {
       return this.#issue(Number(match[1])).subIssues.map((number) => this.#issueJson(this.#issue(number)));

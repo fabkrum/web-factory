@@ -18,6 +18,14 @@ This creates a Site repository in `my-site`: the Factory pinned as a dependency 
 
 Before the first Request, the `kickoff` skill in the Site's `.agents/skills` guides the Builder: who the Site is for, what it must do, how often its content changes, where its operator and Visitors are, and which Agent CLI they use (there is no default). It recommends a stack and a host with the case for and against each option, the Builder decides, and it sets up the chosen stack. It then writes the decisions to a file and runs `factory kickoff <decisions-file>`, which records them and commits: `docs/adr/0001-stack.md` and `docs/adr/0002-host.md` with every option offered, the Stack section in AGENTS.md, and `agentCli`, `host`, `testCommand`, `buildCommand`, `serveCommand` and `localePack` in `factory.json`. An operator or Visitors in Germany switch the German Locale pack on. Last it creates the Stage labels on GitHub. If GitHub cannot be reached the record stays, and running the same command again finishes it; once recorded, different decisions are refused, because a change to the architecture is a new Architecture decision in a Spec. Firebase is the only host the Factory connects itself; for any other host the decisions must carry that host's own setup (`host.setup`), which is recorded and shown as the Builder's next step, so it may hold no line starting with `## `.
 
+## Request and Spec
+
+A Builder describes an idea or a bug in their own words; the `request` skill writes it to a file and runs `factory request <request-file>`, which files it as an issue in the Request Stage. Before any GitHub login, the command says why a login is needed now and changes nothing; running it again afterwards files the Request.
+
+The `spec` skill questions the Builder until the Request is precise, agrees how to tell that the Site does what it should, and cuts the work into thin vertical Tickets, splitting any it judges too big for one session. `factory spec <spec-file>` then makes the Request's issue its Spec (same number; the Builder's words stay in its body) and files the Tickets as sub-issues in the Spec Stage with native blockers, and prints the cut. The file must say whether the Request touches architecture: an Architecture decision becomes the next numbered ADR, is named in the Stack section of AGENTS.md and committed. Running the command again replaces the whole cut, which also finishes a run GitHub cut short; the issue only carries the Spec Stage label while a whole cut stands.
+
+Once the Builder confirms, `factory spec confirm <spec>` moves the Spec to the Design Stage. Its Tickets stay in the Spec Stage until the Design is approved; the Ticket loop builds only Tickets in the Build Stage.
+
 ## Development
 
 The Factory package is `@fabkrum/web-factory`, with the command `factory`. It is written in TypeScript for Node 22.19 or later.

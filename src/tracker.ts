@@ -20,6 +20,9 @@ export interface PullRequest {
   url: string;
 }
 
+/** GitHub refused because nobody is logged in; the Builder has to log in, nothing else helps. */
+export class NotLoggedInError extends Error {}
+
 /** The boundary to wherever the Site's issues live (GitHub, through its CLI). */
 export interface Tracker {
   /**
@@ -27,6 +30,10 @@ export interface Tracker {
    * issue becomes the parent's sub-issue. Returns its number.
    */
   createIssue(issue: { title: string; body: string; stage: Stage; parent?: number }): Promise<number>;
+  /** Replaces an issue's title and body, as when a Request becomes its Spec. */
+  updateIssue(issue: number, fields: { title: string; body: string }): Promise<void>;
+  /** Takes a Ticket out of its Spec for good, for a cut the Builder changed: it is closed and no longer the Spec's sub-issue. */
+  removeTicket(spec: number, ticket: number): Promise<void>;
   /** Records that `blocker` blocks `issue` (on GitHub, a native issue dependency). */
   addBlocker(issue: number, blocker: number): Promise<void>;
   /** Moves an issue to a Stage: its one Stage label is replaced, its other labels stay. */

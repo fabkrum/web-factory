@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { DECISION_STAGES, isStageLabel, stageLabel, STAGES, type Stage } from "./stages.ts";
-import type { Issue, IssueEvent, PullRequest, Tracker } from "./tracker.ts";
+import { NotLoggedInError, type Issue, type IssueEvent, type PullRequest, type Tracker } from "./tracker.ts";
 
 /** Runs the GitHub CLI with these arguments and returns what it printed. */
 export type Gh = (args: string[], options: { cwd: string; input?: string }) => Promise<string>;
@@ -73,6 +73,16 @@ export class GitHubTracker implements Tracker {
     const created = (await this.#api("POST", "issues", { title, body, labels: [stageLabel(stage)] })) as GitHubIssue;
     if (parent !== undefined) await this.#api("POST", `issues/${parent}/sub_issues`, { sub_issue_id: created.id });
     return created.number;
+  }
+
+  async updateIssue(issue: number, { title, body }: { title: string; body: string }): Promise<void> {
+    await this.#api("PATCH", `issues/${issue}`, { title, body });
+  }
+
+  async removeTicket(spec: number, ticket: number): Promise<void> {
+    const { id, state } = await this.#issue(ticket);
+    if (state === "open") await this.#api("PATCH", `issues/${ticket}`, { state: "closed", state_reason: "not_planned" });
+    await this.#api("DELETE", `issues/${spec}/sub_issue`, { sub_issue_id: id });
   }
 
   async addBlocker(issue: number, blocker: number): Promise<void> {
@@ -171,15 +181,25 @@ export class GitHubTracker implements Tracker {
     return issue;
   }
 
+  async #run(args: string[], input?: string): Promise<string> {
+    try {
+      return await this.#gh(args, { cwd: this.#cwd, input });
+    } catch (error) {
+      // gh ends every complaint about a missing or expired login with this advice.
+      if (error instanceof Error && /gh auth login/.test(error.message)) throw new NotLoggedInError(error.message);
+      throw error;
+    }
+  }
+
   async #repository(): Promise<string> {
-    this.#repo ??= (await this.#gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], { cwd: this.#cwd })).trim();
+    this.#repo ??= (await this.#run(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"])).trim();
     return this.#repo;
   }
 
   async #api(method: string, path: string, body?: unknown): Promise<unknown> {
     const args = ["api", "-X", method, `repos/${await this.#repository()}/${path}`, ...API_HEADERS];
     if (body !== undefined) args.push("--input", "-");
-    const output = await this.#gh(args, { cwd: this.#cwd, input: body === undefined ? undefined : JSON.stringify(body) });
+    const output = await this.#run(args, body === undefined ? undefined : JSON.stringify(body));
     return output.trim() === "" ? undefined : JSON.parse(output);
   }
 
@@ -187,7 +207,7 @@ export class GitHubTracker implements Tracker {
   async #list(path: string): Promise<unknown[]> {
     const separator = path.includes("?") ? "&" : "?";
     const args = ["api", `repos/${await this.#repository()}/${path}${separator}per_page=100`, "--paginate", "--slurp", ...API_HEADERS];
-    const pages = JSON.parse(await this.#gh(args, { cwd: this.#cwd })) as unknown[][];
+    const pages = JSON.parse(await this.#run(args)) as unknown[][];
     return pages.flat();
   }
 }

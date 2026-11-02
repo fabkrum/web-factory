@@ -1,23 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { AGENT_CLIS, CONFIG_FILE, ConfigError, type AgentCliName } from "./config.ts";
-import { git } from "./git.ts";
+import { AGENTS_FILE, commitRecord, fieldReader, findStackSection, hasSectionHeading, readSkillFile, renderAdr, withStackSection, writeAdr, type Choice } from "./decision-record.ts";
 import type { Tracker } from "./tracker.ts";
-
-/** One stack or host the Builder was offered, with the case for and against it. */
-export interface Option {
-  name: string;
-  for: string;
-  against: string;
-}
-
-/** One Architecture decision: what was offered, what the model recommended, what the Builder chose and why. */
-export interface Choice {
-  chosen: string;
-  recommended: string;
-  reason: string;
-  options: Option[];
-}
 
 /** What the Builder decided at Kickoff; the kickoff skill writes it down after their conversation. */
 export interface KickoffDecisions {
@@ -34,19 +19,14 @@ export interface KickoffDecisions {
 /** A Kickoff that stopped for a reason the Builder can read; the message is printed as it is. */
 export class KickoffError extends Error {}
 
-const AGENTS_FILE = "AGENTS.md";
 const STACK_ADR = "docs/adr/0001-stack.md";
 const HOST_ADR = "docs/adr/0002-host.md";
 const NOTHING_DECIDED = "Not decided yet";
-const SECTION_HEADING = /^## /m;
 
 const LOCALE_PACK_ON = "The German Locale pack is on: Review checks the Impressum, the privacy policy, price display, and fonts and third-party requests before consent. It catches common mistakes and is not legal advice.";
 const LOCALE_PACK_OFF = "No Locale pack is on: Review runs only the generic checks, which check no country's law. This is not legal advice.";
 
-function text(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.trim() === "") throw new KickoffError(`The Kickoff decisions have no ${field}.`);
-  return value;
-}
+const { text, record, choice } = fieldReader("The Kickoff decisions", (message) => new KickoffError(message));
 
 function country(value: unknown, field: string): string {
   if (typeof value !== "string" || !/^[A-Z]{2}$/.test(value)) {
@@ -55,38 +35,11 @@ function country(value: unknown, field: string): string {
   return value;
 }
 
-function record(value: unknown, field: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) throw new KickoffError(`The Kickoff decisions have no ${field}.`);
-  return value as Record<string, unknown>;
-}
-
 function agentCli(value: unknown): AgentCliName {
   const known = `${AGENT_CLIS.slice(0, -1).join(", ")} and ${AGENT_CLIS.at(-1)}`;
   if (value === undefined) throw new KickoffError(`The Kickoff decisions name no Agent CLI, and there is no default: ask the Builder which one they use (${known}).`);
   if (typeof value === "string" && (AGENT_CLIS as readonly string[]).includes(value)) return value as AgentCliName;
   throw new KickoffError(`The Kickoff decisions name the Agent CLI ${JSON.stringify(value)}, but the Factory supports only ${known}.`);
-}
-
-function choice(value: unknown, field: string): Choice {
-  const raw = record(value, field);
-  if (!Array.isArray(raw.options) || raw.options.length < 2) {
-    throw new KickoffError(`The Kickoff decisions offer the Builder fewer than two options for ${field}, and it takes at least two to make a choice.`);
-  }
-  const options = raw.options.map((option: unknown, index) => {
-    const entry = record(option, `${field}.options[${index}]`);
-    const name = text(entry.name, `${field}.options[${index}].name`);
-    return { name, for: text(entry.for, `case for ${name} (${field})`), against: text(entry.against, `case against ${name} (${field})`) };
-  });
-  const offered = (name: string, role: string): string => {
-    if (!options.some((option) => option.name === name)) throw new KickoffError(`The Kickoff decisions name ${name} as ${role} ${field}, but it is not among the options offered.`);
-    return name;
-  };
-  return {
-    chosen: offered(text(raw.chosen, `${field}.chosen`), "the chosen"),
-    recommended: offered(text(raw.recommended, `${field}.recommended`), "the recommended"),
-    reason: text(raw.reason, `${field}.reason`),
-    options,
-  };
 }
 
 function isFirebase(host: string): boolean {
@@ -124,7 +77,7 @@ export function parseDecisions(raw: unknown): KickoffDecisions {
       build: commands.build as string | undefined,
     },
   };
-  if (SECTION_HEADING.test(stackBody(parsed))) {
+  if (hasSectionHeading(stackBody(parsed))) {
     throw new KickoffError(`The Kickoff decisions hold a line starting with "## " in the text for the Stack section of ${AGENTS_FILE}, where it would start a new section. Write that text without it; host.setup is the likely place.`);
   }
   return parsed;
@@ -140,18 +93,8 @@ function nextStep({ host }: KickoffDecisions): string {
 
 function adr(title: string, decisions: KickoffDecisions, decision: Choice, consequence?: string): string {
   const { site, location } = decisions;
-  const options = decision.options.map((option) => {
-    const marks = [option.name === decision.chosen ? "chosen" : "", option.name === decision.recommended ? "recommended" : ""].filter(Boolean);
-    return `### ${option.name}${marks.length > 0 ? ` (${marks.join(", ")})` : ""}\n\nFor: ${option.for}\n\nAgainst: ${option.against}\n`;
-  });
-  return [
-    `# ${title}\n`,
-    `The Site is for: ${site.audience}. It must: ${site.purpose}. Its content changes: ${site.changeFrequency}. Its operator is in ${location.operatorCountry}, its Visitors in ${location.visitorCountries.join(", ")}.\n`,
-    `The Builder chose ${decision.chosen}. ${decision.reason}\n`,
-    "## Options offered\n",
-    ...options,
-    ...(consequence ? [`## Consequences\n\n${consequence}\n`] : []),
-  ].join("\n");
+  const context = `The Site is for: ${site.audience}. It must: ${site.purpose}. Its content changes: ${site.changeFrequency}. Its operator is in ${location.operatorCountry}, its Visitors in ${location.visitorCountries.join(", ")}.`;
+  return renderAdr(title, context, decision, consequence);
 }
 
 /** The body of the Stack section in AGENTS.md, exactly as `findStackSection` reads it back: `parseDecisions` keeps it so. */
@@ -172,21 +115,10 @@ function stackBody(decisions: KickoffDecisions): string {
   ].join("\n");
 }
 
-/** The text of the Stack section, from its heading up to the next one; undefined without that heading. */
-function findStackSection(agents: string): { start: number; end: number; body: string } | undefined {
-  const heading = /^## Stack[ \t]*$/m.exec(agents);
-  if (!heading) return undefined;
-  const start = heading.index + heading[0].length;
-  const next = agents.slice(start).search(SECTION_HEADING);
-  const end = next === -1 ? agents.length : start + next;
-  return { start, end, body: agents.slice(start, end).trim() };
-}
-
 async function writeRecord(siteDir: string, decisions: KickoffDecisions, agents: string): Promise<void> {
-  await mkdir(join(siteDir, "docs", "adr"), { recursive: true });
-  await writeFile(join(siteDir, STACK_ADR), adr(`Build the Site with ${decisions.stack.chosen}`, decisions, decisions.stack));
+  await writeAdr(siteDir, STACK_ADR, adr(`Build the Site with ${decisions.stack.chosen}`, decisions, decisions.stack));
   const { host } = decisions;
-  await writeFile(join(siteDir, HOST_ADR), adr(`Host the Site on ${host.chosen}`, decisions, host, `Next step after Kickoff: ${nextStep(decisions)}`));
+  await writeAdr(siteDir, HOST_ADR, adr(`Host the Site on ${host.chosen}`, decisions, host, `Next step after Kickoff: ${nextStep(decisions)}`));
   await writeFile(join(siteDir, CONFIG_FILE), await configWith(siteDir, decisions));
   await writeFile(join(siteDir, AGENTS_FILE), withStackSection(agents, stackBody(decisions)));
 }
@@ -224,41 +156,6 @@ async function configWith(siteDir: string, decisions: KickoffDecisions): Promise
   )}\n`;
 }
 
-function withStackSection(agents: string, body: string): string {
-  const section = findStackSection(agents);
-  if (!section) return `${agents.trimEnd()}\n\n## Stack\n\n${body}\n`;
-  const after = agents.slice(section.end);
-  return `${agents.slice(0, section.start)}\n\n${body}\n${after === "" ? "" : `\n${after}`}`;
-}
-
-/** Commits only Kickoff's own files, so whatever the Builder has staged stays theirs. */
-async function commitRecord(siteDir: string): Promise<void> {
-  const paths = [AGENTS_FILE, CONFIG_FILE, STACK_ADR, HOST_ADR];
-  if ((await git(siteDir, "status", "--porcelain", "--", ...paths)) === "") return;
-  await git(siteDir, "add", "--", ...paths);
-  const identity = await git(siteDir, "config", "user.email").then(
-    () => [],
-    () => ["-c", "user.name=web-factory", "-c", "user.email=web-factory@users.noreply.github.com"],
-  );
-  await git(siteDir, ...identity, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Record the Site's first Architecture decisions", "--", ...paths);
-}
-
-async function readDecisions(siteDir: string, file: string): Promise<KickoffDecisions> {
-  let raw: string;
-  try {
-    raw = await readFile(resolve(siteDir, file), "utf8");
-  } catch {
-    throw new KickoffError(`${file} could not be read. It is the file the kickoff skill writes with the Builder's decisions.`);
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new KickoffError(`${file} is not valid JSON.`);
-  }
-  return parseDecisions(parsed);
-}
-
 /**
  * Records a Kickoff: the ADRs, the settings the Ticket loop and Review read, and the Stack
  * section, then the Stage labels. AGENTS.md is written last, so its Stack section says whether
@@ -266,7 +163,7 @@ async function readDecisions(siteDir: string, file: string): Promise<KickoffDeci
  */
 export async function runKickoff(options: { siteDir: string; file: string; tracker: Tracker; stdout: (text: string) => void }): Promise<void> {
   const { siteDir, file, tracker, stdout } = options;
-  const decisions = await readDecisions(siteDir, file);
+  const decisions = parseDecisions(await readSkillFile(siteDir, file, "kickoff", (message) => new KickoffError(message)));
   let agents: string;
   try {
     agents = await readFile(join(siteDir, AGENTS_FILE), "utf8");
@@ -281,7 +178,7 @@ export async function runKickoff(options: { siteDir: string; file: string; track
       `${AGENTS_FILE} already holds this Site's Stack section, and these decisions differ from it, so nothing was changed. A change to the architecture is a new Architecture decision, raised in a Spec.`,
     );
   }
-  await commitRecord(siteDir);
+  await commitRecord(siteDir, [AGENTS_FILE, CONFIG_FILE, STACK_ADR, HOST_ADR], "Record the Site's first Architecture decisions");
 
   try {
     await tracker.ensureStageLabels();

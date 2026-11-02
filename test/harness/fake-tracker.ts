@@ -1,5 +1,5 @@
 import { isStageLabel, stageLabel, STAGES, type Stage } from "../../src/stages.ts";
-import type { Issue, IssueEvent, PullRequest, Tracker } from "../../src/tracker.ts";
+import { NotLoggedInError, type Issue, type IssueEvent, type PullRequest, type Tracker } from "../../src/tracker.ts";
 
 export interface FakeIssue extends Issue {
   parent?: number;
@@ -22,6 +22,8 @@ export class FakeTracker implements Tracker {
   /** The repository's labels; like GitHub, a label is unique regardless of case. */
   readonly #labels: string[] = [];
   #next = 1;
+  /** While true, every call refuses, as GitHub does before the Builder logs in. */
+  loggedOut = false;
 
   addSpec(title: string, body = ""): number {
     return this.#add({ title, body, labels: ["stage:spec"] });
@@ -68,8 +70,21 @@ export class FakeTracker implements Tracker {
   }
 
   async createIssue({ title, body, stage, parent }: { title: string; body: string; stage: Stage; parent?: number }): Promise<number> {
+    this.#needsLogin();
     if (parent !== undefined) this.issue(parent);
     return this.#add({ title, body, labels: [stageLabel(stage)], parent });
+  }
+
+  async updateIssue(number: number, { title, body }: { title: string; body: string }): Promise<void> {
+    this.#needsLogin();
+    Object.assign(this.issue(number), { title, body });
+  }
+
+  async removeTicket(spec: number, ticket: number): Promise<void> {
+    const issue = this.issue(ticket);
+    if (issue.parent !== spec) throw new Error(`#${ticket} is not a sub-issue of #${spec}`);
+    issue.state = "closed";
+    delete issue.parent;
   }
 
   async addBlocker(number: number, blocker: number): Promise<void> {
@@ -85,6 +100,7 @@ export class FakeTracker implements Tracker {
   }
 
   async ensureStageLabels(): Promise<string[]> {
+    this.#needsLogin();
     const missing = STAGES.map(stageLabel).filter((label) => !this.#hasLabel(label));
     for (const label of missing) this.createLabel(label);
     return missing;
@@ -102,6 +118,7 @@ export class FakeTracker implements Tracker {
   }
 
   async getIssue(number: number): Promise<Issue> {
+    this.#needsLogin();
     return this.#copy(this.issue(number));
   }
 
@@ -133,6 +150,10 @@ export class FakeTracker implements Tracker {
     issue.history.push({ kind: "closed" });
   }
 
+  #needsLogin(): void {
+    if (this.loggedOut) throw new NotLoggedInError("To get started with GitHub CLI, please run:  gh auth login");
+  }
+
   #add(fields: { title: string; body: string; labels: string[]; parent?: number }): number {
     const number = this.#next++;
     this.#issues.set(number, { number, state: "open", comments: [], history: [], blockedBy: [], ...fields });
@@ -154,6 +175,8 @@ export class FakeTracker implements Tracker {
 export function delegateTo(tracker: Tracker): Tracker {
   return {
     createIssue: (issue) => tracker.createIssue(issue),
+    updateIssue: (issue, fields) => tracker.updateIssue(issue, fields),
+    removeTicket: (spec, ticket) => tracker.removeTicket(spec, ticket),
     addBlocker: (issue, blocker) => tracker.addBlocker(issue, blocker),
     moveToStage: (issue, stage) => tracker.moveToStage(issue, stage),
     ensureStageLabels: () => tracker.ensureStageLabels(),

@@ -8,4 +8,4 @@ Version 0.0.196, in `.agents/skills/modern-web-guidance/`, by the Modern Web Gui
 
 ## Matt Pocock's skills
 
-The way the `kickoff` skill in `.agents/skills/kickoff/` questions the Builder, one question at a time with a recommendation, is adapted from [mattpocock/skills](https://github.com/mattpocock/skills) by Matt Pocock, under the MIT License.
+The `kickoff`, `request` and `spec` skills in `.agents/skills/` are adapted from [mattpocock/skills](https://github.com/mattpocock/skills) by Matt Pocock, under the MIT License: the way they question the Builder, one question at a time with a recommendation, and the way `spec` cuts a Spec into vertical slices with blockers.
