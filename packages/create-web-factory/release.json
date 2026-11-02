@@ -4,6 +4,7 @@
   "reviewChecks": [
     "performance/lighthouse",
     "accessibility/axe",
+    "accessibility/thumb-test",
     "legal/impressum",
     "legal/privacy-policy",
     "legal/german-prices",

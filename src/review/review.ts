@@ -10,12 +10,14 @@ import { findRoutes } from "./routes.ts";
 import { sitemapCheck } from "./sitemap.ts";
 import { advisoriesCheck, siteTestsCheck } from "./repository.ts";
 import { consoleCheck, headersCheck } from "./security.ts";
+import { thumbCheck } from "./thumb.ts";
 import { canonicalCheck, socialPreviewCheck, structuredDataCheck } from "./visibility.ts";
 
 /** Every Review check `factory review` has; a Locale pack's run only on a Site with that pack on. */
 export const REVIEW_CHECKS: ReviewCheck[] = [
   lighthouseCheck,
   axeCheck,
+  thumbCheck,
   ...GERMAN_LOCALE_PACK,
   sitemapCheck,
   canonicalCheck,
@@ -48,6 +50,8 @@ export interface CheckResult {
   failures: Failure[];
   /** Why the check did not run; a check that did not run has no failures and does not stop a Pass. */
   skipped?: string;
+  /** Why the check has nothing to measure on this Site; it ran, so this is no gap in the review. */
+  notApplicable?: string;
 }
 
 export interface ReviewReport {
@@ -82,6 +86,10 @@ export async function runReview(url: URL, requested: ReviewCheck[] = REVIEW_CHEC
       const outcome = await check.run(site);
       if ("notRun" in outcome) {
         results.set(check, { id: check.id, name: check.name, passed: true, failures: [], skipped: outcome.notRun });
+        continue;
+      }
+      if ("notApplicable" in outcome) {
+        results.set(check, { id: check.id, name: check.name, passed: true, failures: [], notApplicable: outcome.notApplicable });
         continue;
       }
       const failures = outcome;

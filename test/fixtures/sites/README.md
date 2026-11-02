@@ -48,6 +48,12 @@ instead. The advisories check reports a Site locked by any package manager other
 than npm (pnpm, Yarn, Bun, Deno) as not run, and fails only a Site with no
 lockfile.
 
+`phone-menu` has a menu button at phone width whose links open above a link on
+the page, and must Pass the thumb test. `phone-menu-falls-through` looks the same
+but its open menu has `pointer-events: none`, so taps land on the page behind.
+Every other fixture has no phone menu, and the thumb test reports it as not
+applicable.
+
 The `design-*` Site repositories in `../repos` carry a Design handoff in `design/`
 for the `code/design` Review check: `design-clean` stands, and each of the others
 carries one defect, named by its folder.

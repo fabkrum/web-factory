@@ -42,12 +42,17 @@ export interface ReviewCheck {
   needsRepo?: boolean;
   /** The Locale pack this check belongs to: it runs only on a Site with that pack on. */
   localePack?: LocalePack;
-  run(site: SiteUnderReview): Promise<Failure[] | NotRun>;
+  run(site: SiteUnderReview): Promise<Failure[] | NotRun | NotApplicable>;
 }
 
 /** What a check returns when it could not measure this Site at all, with why in plain language; it does not stop a Pass. */
 export interface NotRun {
   notRun: string;
+}
+
+/** What a check returns when it measured the Site and found nothing it applies to, with why in plain language; it does not stop a Pass. */
+export interface NotApplicable {
+  notApplicable: string;
 }
 
 /** Anything that stops a review from measuring the Site at all, in words the Builder can act on. */
