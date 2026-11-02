@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { DECISION_STAGES, isStageLabel, stageLabel, STAGES, type Stage } from "./stages.ts";
+import { redactDeep } from "./secrets.ts";
 import { NotLoggedInError, type Issue, type IssueEvent, type OpenIssue, type PullRequest, type Tracker } from "./tracker.ts";
 
 /** Runs the GitHub CLI with these arguments and returns what it printed. */
@@ -245,7 +246,8 @@ export class GitHubTracker implements Tracker {
   async #api(method: string, path: string, body?: unknown): Promise<unknown> {
     const args = ["api", "-X", method, `repos/${await this.#repository()}/${path}`, ...API_HEADERS];
     if (body !== undefined) args.push("--input", "-");
-    const output = await this.#run(args, body === undefined ? undefined : JSON.stringify(body));
+    // Everything the Factory writes to GitHub may be public, so no secret leaves in it.
+    const output = await this.#run(args, body === undefined ? undefined : JSON.stringify(redactDeep(body)));
     return output.trim() === "" ? undefined : JSON.parse(output);
   }
 

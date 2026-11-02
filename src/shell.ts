@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { siteEnvironment } from "./secrets.ts";
 
 export interface ShellResult {
   exitCode: number;
@@ -9,13 +10,14 @@ export interface ShellResult {
 }
 
 /**
- * Runs one command with `sh -c` in `cwd`. Given `timeoutMs`, it stops the
- * command after that long, with everything it started (a test runner, a server).
+ * Runs one of the Site's commands with `sh -c` in `cwd`, without the Factory's secrets (what
+ * it prints can reach a comment on the Ticket). Given `timeoutMs`, it stops the command after
+ * that long, with everything it started (a test runner, a server).
  */
 export function runShell(cwd: string, command: string, timeoutMs?: number): Promise<ShellResult> {
   return new Promise((resolve, reject) => {
     // Its own process group, so a time limit stops the command's children too.
-    const child = spawn("sh", ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"], detached: timeoutMs !== undefined });
+    const child = spawn("sh", ["-c", command], { cwd, env: siteEnvironment(), stdio: ["ignore", "pipe", "pipe"], detached: timeoutMs !== undefined });
     let output = "";
     let timedOut = false;
     const timer =
