@@ -122,12 +122,26 @@ function slug(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "decision";
 }
 
-/** Where an ADR of this title lives: its existing file, or the next free number. */
-export async function adrPath(siteDir: string, title: string): Promise<string> {
+/** Opens the context of an ADR a Request raised; the word after the number ends it, so #1 never reads as #12. */
+function raisedBy(request: number): string {
+  return `Raised by Request #${request}:`;
+}
+
+export function requestContext(request: number, words: string): string {
+  return `${raisedBy(request)} ${words}`;
+}
+
+/**
+ * Where the ADR this Request raises under this title lives: the file an earlier run of the same
+ * Request wrote, or the next free number. Any other ADR of that title is another decision's record.
+ */
+export async function adrPath(siteDir: string, title: string, request: number): Promise<string> {
   const files = await readdir(join(siteDir, ADR_FOLDER)).catch(() => [] as string[]);
   const name = slug(title);
-  const existing = files.find((file) => file.replace(/^\d+-/, "") === `${name}.md`);
-  if (existing) return `${ADR_FOLDER}/${existing}`;
+  for (const file of files.filter((candidate) => candidate.replace(/^\d+-/, "") === `${name}.md`)) {
+    const [, context] = (await readFile(join(siteDir, ADR_FOLDER, file), "utf8")).split("\n\n");
+    if (context?.startsWith(raisedBy(request))) return `${ADR_FOLDER}/${file}`;
+  }
   const highest = Math.max(0, ...files.map((file) => Number(/^(\d+)-/.exec(file)?.[1] ?? 0)));
   return `${ADR_FOLDER}/${String(highest + 1).padStart(4, "0")}-${name}.md`;
 }

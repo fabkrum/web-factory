@@ -310,6 +310,59 @@ describe("factory spec", () => {
       expect(readdirSync(join(dir, "docs/adr"))).toHaveLength(3);
     });
 
+    it("raises a new ADR when its title collides with a Kickoff ADR, and leaves that record alone", async () => {
+      const dir = kickedOffSite();
+      const tracker = new FakeTracker();
+      const request = await filedRequest(dir, tracker);
+
+      const written = await run(dir, tracker, "spec", specFile(request, { architectureDecision: { ...cmsDecision, title: "Host" } }));
+
+      expect(written.exitCode, written.stderr).toBe(0);
+      expect(readFileSync(join(dir, "docs/adr/0002-host.md"), "utf8")).toBe("# Host the Site on Firebase\n");
+      expect(readFileSync(join(dir, "docs/adr/0003-host.md"), "utf8")).toContain("Decap CMS");
+      expect(readFileSync(join(dir, "AGENTS.md"), "utf8")).toContain("docs/adr/0003-host.md");
+      expect(tracker.issue(request).body).toContain("docs/adr/0003-host.md");
+      expect(git(dir, "status", "--porcelain")).toBe("");
+    });
+
+    it("raises a new ADR when its title collides with another Request's, and a rerun still finds its own", async () => {
+      const dir = kickedOffSite();
+      const tracker = new FakeTracker();
+      const first = await filedRequest(dir, tracker);
+      const second = await filedRequest(dir, tracker);
+      const firstPath = "docs/adr/0003-use-a-headless-cms-for-the-menu.md";
+      const secondPath = "docs/adr/0004-use-a-headless-cms-for-the-menu.md";
+      const secondFile = specFile(second, { architectureDecision: { ...cmsDecision, chosen: "Markdown files", reason: "Nothing new to learn." } });
+
+      await run(dir, tracker, "spec", specFile(first, { architectureDecision: cmsDecision }));
+      const firstAdr = readFileSync(join(dir, firstPath), "utf8");
+      const written = await run(dir, tracker, "spec", secondFile);
+
+      expect(written.exitCode, written.stderr).toBe(0);
+      expect(readFileSync(join(dir, firstPath), "utf8")).toBe(firstAdr);
+      expect(readFileSync(join(dir, secondPath), "utf8")).toContain("Nothing new to learn.");
+      const agents = readFileSync(join(dir, "AGENTS.md"), "utf8");
+      expect(agents).toContain(firstPath);
+      expect(agents).toContain(secondPath);
+
+      const head = git(dir, "rev-parse", "HEAD");
+      await run(dir, tracker, "spec", secondFile);
+      expect(git(dir, "rev-parse", "HEAD")).toBe(head);
+      expect(readdirSync(join(dir, "docs/adr"))).toHaveLength(4);
+    });
+
+    it("does not take a Request whose number starts the same for this one", async () => {
+      const dir = kickedOffSite();
+      const tracker = new FakeTracker();
+      const request = await filedRequest(dir, tracker);
+      commitFile(dir, "docs/adr/0003-use-a-headless-cms-for-the-menu.md", `# Use a headless CMS for the menu\n\nRaised by Request #${request}0: other words\n`);
+
+      await run(dir, tracker, "spec", specFile(request, { architectureDecision: cmsDecision }));
+
+      expect(readFileSync(join(dir, "docs/adr/0003-use-a-headless-cms-for-the-menu.md"), "utf8")).toContain("other words");
+      expect(readdirSync(join(dir, "docs/adr"))).toContain("0004-use-a-headless-cms-for-the-menu.md");
+    });
+
     it("refuses before Kickoff, when there is no architecture to change", async () => {
       const dir = site();
       commitFile(dir, "AGENTS.md", TEMPLATE_AGENTS);

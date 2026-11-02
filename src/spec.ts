@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { adrPath, AGENTS_FILE, commitRecord, fieldReader, findStackSection, hasSectionHeading, readSkillFile, renderAdr, withStackSection, writeAdr, type Choice } from "./decision-record.ts";
+import { adrPath, AGENTS_FILE, commitRecord, fieldReader, findStackSection, hasSectionHeading, readSkillFile, renderAdr, requestContext, withStackSection, writeAdr, type Choice } from "./decision-record.ts";
 import { PipelineError } from "./request.ts";
 import { stageLabel } from "./stages.ts";
 import type { Issue, Tracker } from "./tracker.ts";
@@ -130,10 +130,10 @@ async function recordDecision(siteDir: string, spec: SpecFile, decision: Archite
   if (!section || section.body.startsWith(NOTHING_DECIDED)) {
     throw refuse("This Site has had no Kickoff yet, so there is no architecture for this decision to change. Follow the kickoff skill first.");
   }
-  const path = await adrPath(siteDir, decision.title);
+  const path = await adrPath(siteDir, decision.title, spec.request);
   const line = `Later Architecture decision: ${decision.title}: ${decision.chosen}. It replaces anything above that it contradicts; see \`${path}\`.`;
   if (hasSectionHeading(line)) throw refuse("architectureDecision.title holds a line starting with \"## \". Write it without one.");
-  await writeAdr(siteDir, path, renderAdr(decision.title, `Raised by Request #${spec.request}: ${words}`, decision));
+  await writeAdr(siteDir, path, renderAdr(decision.title, requestContext(spec.request, words), decision));
   if (!section.body.includes(`\`${path}\``)) {
     await writeFile(join(siteDir, AGENTS_FILE), withStackSection(agents, `${section.body}\n\n${line}`));
   }
