@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { serveFixtureSite, type ServedSite } from "./harness/fixture-site.ts";
 import { runFactory } from "./harness/run-factory.ts";
-import { servePages } from "./harness/served-pages.ts";
+import { servePages, type Answer } from "./harness/served-pages.ts";
 
 const THUMB = "accessibility/thumb-test";
 
@@ -49,7 +49,7 @@ async function reviewFixture(fixture: string) {
   return review(site.url, CHECKS);
 }
 
-async function reviewPages(pages: Record<string, string>) {
+async function reviewPages(pages: Record<string, Answer>) {
   site = await servePages(pages);
   return review(site.url, [THUMB]);
 }
@@ -417,6 +417,50 @@ document.querySelector("x-widget").attachShadow({ mode: "open" }).innerHTML = '<
     expect(thumb.failures).toEqual([]);
     expect(thumb.notApplicable).toBeUndefined();
     expect(report.areas.flatMap((area) => area.checks).map((check) => check.id)).toContain("visibility/canonical");
+  });
+
+  it("does not take an item that leaves for a slow page for a page that cannot open, and taps the rest", async () => {
+    const slow: Answer = (_, response) => {
+      setTimeout(() => response.writeHead(200, { "content-type": "text/html" }).end("<title>Slow</title>"), 2_500);
+    };
+    const page = panelPage("").replace(`<a href="/one">`, `<a href="/one" ontouchend="location.href='/one'">`).replace("</style>", "#panel a + a { pointer-events: none; }</style>");
+    const { thumb } = await reviewPages({ "/": page, ...ROUTES, "/one": slow });
+
+    expect(thumb.notApplicable).toBeUndefined();
+    expect(thumb.failures.map((failure) => failure.location)).toEqual(['/ at "Two"']);
+    expect(thumb.failures[0]!.reason).toMatch(/page behind/i);
+  });
+
+  it.each([[0], [20], [50], [120]])("taps on past an item that leaves %i ms after the touch", async (delay) => {
+    const page = panelPage("")
+      .replace(`<a href="/one">`, `<a href="/one" ontouchend="setTimeout(() => location.href = '/one', ${delay})">`)
+      .replace("</style>", "#panel a + a { pointer-events: none; }</style>");
+    const { thumb } = await reviewPages({ "/": page, ...ROUTES });
+
+    expect(thumb.notApplicable).toBeUndefined();
+    expect(thumb.failures.map((failure) => failure.location)).toEqual(['/ at "Two"']);
+    expect(thumb.failures[0]!.reason).toMatch(/page behind/i);
+  });
+
+  it("still says so when a page leaves by itself every time, before an item can be touched", async () => {
+    const fidgets = `<script>
+document.querySelector("button").addEventListener("click", () => {
+  let shift = 0;
+  setInterval(() => document.querySelector("#panel a").style.marginLeft = ++shift + "px", 10);
+  setTimeout(() => location.href = "/one", 1000);
+});
+</script>`;
+    const { thumb } = await reviewPages({ "/": panelPage("").replace("</body>", `${fidgets}</body>`), ...ROUTES });
+
+    expect(thumb.failures.map((failure) => failure.reason)).toEqual([expect.stringMatching(/by itself/)]);
+  });
+
+  it.each([["onpointerdown"], ["ontouchstart"], ["ontouchend"]])("catches a tap falling through to a page link that leaves on the touch (%s)", async (handler) => {
+    const page = panelPage("pointer-events: none;").replace(`<a id="page-link" href="/behind">`, `<a id="page-link" href="/behind" ${handler}="location.href='/behind'">`);
+    const { thumb } = await reviewPages({ "/": page, ...ROUTES });
+
+    expect(thumb.failures.map((failure) => failure.location)).toEqual(['/ at "One"', '/ at "Two"']);
+    expect(thumb.failures[0]!.reason).toMatch(/page behind.*page-link/i);
   });
 
   it.each([["div"], ["p"], ["h3"]])("sees a menu of links that each wrap a <%s>, and catches its taps falling through", async (block) => {

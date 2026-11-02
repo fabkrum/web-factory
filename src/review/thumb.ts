@@ -1,4 +1,4 @@
-import type { ElementHandle, JSHandle, Page } from "playwright";
+import type { BrowserContext, ElementHandle, JSHandle, Page, Request } from "playwright";
 import { goTo, movedOn, PageError, settled } from "./browser.ts";
 import type { Failure, ReviewCheck, Route } from "./check.ts";
 
@@ -26,8 +26,9 @@ const MOVED_ON =
 /**
  * Opens the Site's menu at phone width and taps every item with a real touch,
  * on every route, because what lets a tap through can sit on one page only. The
- * tap is stopped as it arrives, so the review reads which element it reached
- * without leaving the page: an item's address, dead or external, does not matter.
+ * tap is stopped as it arrives, so the review reads which element it reached and
+ * an item's address, dead or external, does not matter. A page can still leave on
+ * the touch itself, before the tap arrives; the next item then gets a new page.
  */
 export const thumbCheck: ReviewCheck = {
   id: "accessibility/thumb-test",
@@ -43,7 +44,7 @@ export const thumbCheck: ReviewCheck = {
       }
       const context = await site.browser.newContext(PHONE);
       try {
-        const onRoute = await tapMenu(await context.newPage(), route);
+        const onRoute = await tapMenu(context, route);
         if (!onRoute) continue;
         found = true;
         failures.push(...onRoute);
@@ -60,48 +61,46 @@ export const thumbCheck: ReviewCheck = {
 };
 
 /** What the phone menu of one route does when tapped; undefined when the route has none. */
-async function tapMenu(page: Page, route: Route): Promise<Failure[] | undefined> {
-  const menu = await openMenu(page, route);
+async function tapMenu(context: BrowserContext, route: Route): Promise<Failure[] | undefined> {
+  const menu = await openMenu(context, route);
   if (!menu) return undefined;
   const names = await Promise.all(menu.items.map(nameOf));
   const failures: Failure[] = [];
   let open: Menu | undefined = menu;
-  // A tap is stopped before it clicks, but an item may leave the page on the touch itself.
-  const leaving: Leaving = {};
-  page.on("request", (request) => {
-    if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) return;
-    const arrived = page.waitForEvent("framenavigated", { predicate: (frame) => frame === page.mainFrame(), timeout: TAP_TIMEOUT });
-    leaving.landing = arrived.catch(() => undefined);
-  });
+  let left = false;
   for (const [place, name] of names.entries()) {
-    // Or a page may close its menu on the touch, before the tap is stopped.
-    if (open && (leaving.landing || !(await stillOpen(page, open, place)))) {
-      // Loading the page again while the browser is on its way elsewhere would be cut short by that arrival.
-      await leaving.landing;
-      open = await openAt(page, route, menu.place);
-      leaving.landing = undefined;
+    for (let again = false; ; again = true) {
+      // A page may close its menu on the touch, before the tap is stopped, or be on its way elsewhere.
+      if (open && (left || !(await stillOpen(open, place)))) {
+        open = await openAt(context, route, menu.place);
+        left = false;
+      }
+      const item = open?.items[place];
+      if (!open || !item) {
+        failures.push({
+          reason: "This menu item was gone when the menu was opened a second time, so a Visitor on a phone cannot count on it. Make the menu show the same links each time it opens.",
+          location: `${route.path} at "${name}"`,
+        });
+        break;
+      }
+      try {
+        const tap = await tapItem(open.page, item);
+        left = tap.left;
+        if (tap.failure) failures.push({ reason: tap.failure.reason, location: `${route.path} at "${tap.failure.name}"` });
+        break;
+      } catch (error) {
+        // The page left before this item was touched, which the tap before it may have started. A new page has no such excuse.
+        if (again || !movedOn(error)) throw error;
+        left = true;
+      }
     }
-    const item = open?.items[place];
-    if (!item) {
-      failures.push({
-        reason: "This menu item was gone when the menu was opened a second time, so a Visitor on a phone cannot count on it. Make the menu show the same links each time it opens.",
-        location: `${route.path} at "${name}"`,
-      });
-      continue;
-    }
-    const failure = await tapItem(page, item, leaving);
-    if (failure) failures.push({ reason: failure.reason, location: `${route.path} at "${failure.name}"` });
   }
   return failures;
 }
 
-/** The page's own trip to another page, set from the moment the browser asks for it until the menu is open again. */
-interface Leaving {
-  landing?: Promise<unknown>;
-}
-
 /** An open menu. Its elements hold only until the page loads again. */
 interface Menu {
+  page: Page;
   /** Which of the page's toggles opened it, the one thing about it that outlasts a reload. */
   place: number;
   /** What the page showed before the tap, to tell the menu's links from the page's. */
@@ -117,10 +116,11 @@ interface Menu {
  * it is named, because no wording tells a dead menu button from "See our menu": this
  * check answers for taps that fall through, and a dead menu goes unreported by it.
  */
-async function openMenu(page: Page, route: Route): Promise<Menu | undefined> {
+async function openMenu(context: BrowserContext, route: Route): Promise<Menu | undefined> {
+  const page = await context.newPage();
   const { toggles } = await load(page, route);
   for (const [place, toggle] of toggles.entries()) {
-    const menu = place === 0 ? await tapToggle(page, toggle, place) : await openAt(page, route, place);
+    const menu = place === 0 ? await tapToggle(page, toggle, place) : await openAt(context, route, place);
     if (menu && menu.items.length > 0) return menu;
   }
   return undefined;
@@ -131,16 +131,22 @@ async function load(page: Page, route: Route): Promise<Scan> {
   return settled(page, () => scan(page));
 }
 
-async function openAt(page: Page, route: Route, place: number): Promise<Menu | undefined> {
+/**
+ * Opens the menu on a new page, because a load on top of the old one would race
+ * whatever trip it is still on, however slow. The old page is left to it and goes
+ * with its context: closing a page just as it lands never returns.
+ */
+async function openAt(context: BrowserContext, route: Route, place: number): Promise<Menu | undefined> {
+  const page = await context.newPage();
   const toggle = (await load(page, route)).toggles[place];
   return toggle && tapToggle(page, toggle, place);
 }
 
 /** Whether a link of the open menu still shows, compared with the page before the menu opened. */
-async function stillOpen(page: Page, menu: Menu, place: number): Promise<boolean> {
+async function stillOpen(menu: Menu, place: number): Promise<boolean> {
   try {
-    const { links } = await scan(page, menu.closed);
-    return await page.evaluate(({ links, item }) => links.includes(item as Element), { links, item: menu.items[place] });
+    const { links } = await scan(menu.page, menu.closed);
+    return await menu.page.evaluate(({ links, item }) => links.includes(item as Element), { links, item: menu.items[place] });
   } catch (error) {
     if (movedOn(error)) return false;
     throw error;
@@ -167,55 +173,84 @@ async function tapToggle(page: Page, toggle: Control, place: number): Promise<Me
       if (items.length > 0 && !moving && Date.now() - changed >= OPEN_QUIET) break;
       if (!moving && Date.now() - started >= OPEN_TIMEOUT) break;
     }
-    return { place, closed, items };
+    return { page, place, closed, items };
   } catch (error) {
     if (movedOn(error)) return undefined;
     throw error;
   }
 }
 
-/** One tap on a menu item: why it failed, or undefined when the item took it, which sending the browser to another page also is. */
-async function tapItem(page: Page, item: Control, leaving: Leaving): Promise<{ name: string; reason: string } | undefined> {
+/** One tap on a menu item: why it failed, if it did, and whether the page set off for another page. */
+async function tapItem(page: Page, item: Control): Promise<{ failure?: { name: string; reason: string }; left: boolean }> {
   const name = await nameOf(item);
   const { x, y, onScreen } = await holdStill(page, item);
   if (!onScreen) {
     return {
-      name,
-      reason:
-        "This menu item lies off the screen at phone width, and the menu does not scroll to it, so a Visitor on a phone cannot tap it. Let the open menu scroll (overflow-y: auto), or make it shorter.",
+      left: false,
+      failure: {
+        name,
+        reason:
+          "This menu item lies off the screen at phone width, and the menu does not scroll to it, so a Visitor on a phone cannot tap it. Let the open menu scroll (overflow-y: auto), or make it shorter.",
+      },
     };
   }
   // Wrapped in an object so that this returns once the listener is in place, not when the tap arrives.
   const listening = await item.evaluateHandle(
-    (element, timeout) => ({
-      tap: new Promise<Landing | null>((resolve) => {
-        const listener = (event: Event) => {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          clearTimeout(timer);
-          const target = event.target as Element;
-          const tag = target.outerHTML.slice(0, target.outerHTML.indexOf(">") + 1);
-          resolve({ took: element.contains(target), landed: tag.length > 100 ? `${tag.slice(0, 99)}…` : tag });
-        };
-        const timer = setTimeout(() => {
-          window.removeEventListener("click", listener, true);
-          resolve(null);
-        }, timeout);
-        window.addEventListener("click", listener, { capture: true, once: true });
-      }),
-    }),
-    TAP_TIMEOUT,
+    (element, { x, y, timeout }) => {
+      const landing = (target: Element): Landing => {
+        const tag = target.outerHTML.slice(0, target.outerHTML.indexOf(">") + 1);
+        return { took: element.contains(target), landed: tag.length > 100 ? `${tag.slice(0, 99)}…` : tag };
+      };
+      return {
+        aimed: landing(document.elementFromPoint(x, y) ?? document.documentElement),
+        tap: new Promise<Landing | null>((resolve) => {
+          const listener = (event: Event) => {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            clearTimeout(timer);
+            resolve(landing(event.target as Element));
+          };
+          const timer = setTimeout(() => {
+            window.removeEventListener("click", listener, true);
+            resolve(null);
+          }, timeout);
+          window.addEventListener("click", listener, { capture: true, once: true });
+        }),
+      };
+    },
+    { x, y, timeout: TAP_TIMEOUT },
   );
+  // Asked before the touch: a page that leaves on the touch takes the answer of the click with it.
+  const aimed = await listening.evaluate((waiting) => waiting.aimed);
+  let setOff = false;
+  const onRequest = (request: Request) => {
+    setOff ||= sendsOff(page, request);
+  };
+  page.on("request", onRequest);
   const tap = await tapped(page, x, y, listening);
-  if (tap === "left" || tap?.took) return undefined;
-  if (!tap) {
-    if (leaving.landing) return undefined;
-    return { name, reason: "Tapping this menu item at phone width does nothing: no element answers the tap, so a Visitor on a phone cannot follow it." };
+  page.off("request", onRequest);
+  const left = tap === "left" || setOff;
+  const landing = tap === "left" || (!tap && left) ? aimed : tap;
+  if (landing?.took) return { left };
+  if (!landing) {
+    return { left, failure: { name, reason: "Tapping this menu item at phone width does nothing: no element answers the tap, so a Visitor on a phone cannot follow it." } };
   }
   return {
-    name,
-    reason: `This menu item looks tappable at phone width, but the tap goes past it to the page behind: it lands on ${tap.landed}. A Visitor taps the menu and gets something else. Keep the open menu above the page (z-index) and let it take taps (no pointer-events: none on it).`,
+    left,
+    failure: {
+      name,
+      reason: `This menu item looks tappable at phone width, but the tap goes past it to the page behind: it lands on ${landing.landed}. A Visitor taps the menu and gets something else. Keep the open menu above the page (z-index) and let it take taps (no pointer-events: none on it).`,
+    },
   };
+}
+
+/** Whether this request takes the page itself elsewhere. An iframe's first request has no frame to ask yet. */
+function sendsOff(page: Page, request: Request): boolean {
+  try {
+    return request.isNavigationRequest() && request.frame() === page.mainFrame();
+  } catch {
+    return false;
+  }
 }
 
 /** Touches the spot and reads where the tap landed: null when no click came, "left" when the page went away first. */
