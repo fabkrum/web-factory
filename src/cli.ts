@@ -3,13 +3,23 @@ import { systemClock, type Clock } from "./clock.ts";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { CONFIG_FILE, ConfigError, readSiteConfig, type SiteConfig } from "./config.ts";
+import { ReviewError } from "./review/check.ts";
 import { couldNotRun, formatReport } from "./review/report.ts";
 import { REVIEW_CHECKS, runReview } from "./review/review.ts";
 import { currentBranch } from "./git.ts";
+import { approveChange, runApprove } from "./approve.ts";
+import { BoardError, boardAddress, readBoard, serveBoard } from "./board.ts";
+import { approveDesign, runDesign } from "./design.ts";
+import { IMPORT_TOOLS, runDesignImport, type ImportTool } from "./design-import.ts";
 import { KickoffError, runKickoff } from "./kickoff.ts";
+import { formatNextStep, whatIsNext } from "./next.ts";
+import { PipelineError, runRequest } from "./request.ts";
+import { confirmCut, runSpec } from "./spec.ts";
+import { runUpdate } from "./update.ts";
 import { LoopError, runTicketLoop, type ReviewSite } from "./ticket-loop.ts";
 import { HostError, type Host } from "./host.ts";
-import type { Tracker } from "./tracker.ts";
+import type { FactoryReleases } from "./releases.ts";
+import { NotLoggedInError, type Tracker } from "./tracker.ts";
 
 export interface FactoryDeps {
   cwd: string;
@@ -17,15 +27,26 @@ export interface FactoryDeps {
   agentCli?: AgentCli;
   /** The Site's issues on GitHub (the GitHub tracker), or a fake in tests. */
   tracker?: Tracker;
+  /** Where the Factory is published (npm), or a fake in tests. */
+  releases?: FactoryReleases;
   /** The adapter for the host in the Site's `factory.json`; missing when the Factory has none for it. */
   host?: Host;
   /** The real clock unless a test fakes it. */
   clock?: Clock;
   /** Runs the Review checks on a Ticket's served build: every one of them, unless a test says otherwise. */
   reviewSite?: ReviewSite;
+  /** Opens an address in the Builder's browser; missing, the Builder opens the printed address. */
+  openBrowser?: (url: string) => void;
+  /** Ends `factory board`; without it the board runs until the Builder stops the command. */
+  stop?: AbortSignal;
+  /** The environment, which tells whether this is a Codespace. */
+  env?: NodeJS.ProcessEnv;
   stdout: (text: string) => void;
   stderr: (text: string) => void;
 }
+
+/** Where the board opens unless the Builder says otherwise; fixed, so a forwarded port stays the same. */
+const BOARD_PORT = 4400;
 
 export const USAGE = `Usage:
   factory kickoff <decisions-file>
@@ -36,10 +57,42 @@ export const USAGE = `Usage:
                                   after the kickoff skill's steps on the host's side
   factory publish                 Publish the Site live; merging into the base branch
                                   runs this on GitHub
+  factory request <request-file>  File the Builder's Request as an issue in the Request Stage;
+                                  the request skill writes the file
+  factory spec <spec-file>        Write the Spec on its Request's issue and file its Tickets
+                                  in the Spec Stage; the spec skill writes the file. Run again
+                                  with a changed file to replace the cut
+  factory spec confirm <spec>     The Builder confirmed the cut: the Spec moves on to Design
+  factory design <spec>           Make the Design handoff in design/ from the DESIGN.md and
+                                  sample page the design skill wrote: generated tokens, a
+                                  reference screenshot per route and a provenance record.
+                                  Run again after any change
+  factory design import <tool> <spec> [<where-it-came-from>]
+                                  Make the Design handoff from what an import skill saved in
+                                  .factory/design-import/<tool> and the DESIGN.md it wrote.
+                                  <tool> is ${IMPORT_TOOLS.join(", ")}. Say where the design
+                                  came from, such as its address; claude-design can do without
+  factory design approve <spec>   The Builder approved the Design: its Tickets move to Build
   factory loop <spec>             Build the open Tickets of Spec number <spec>, unattended
+  factory approve <spec>          Approve Spec number <spec>: while its pull request is open
+                                  this shows the Preview and the pull request; once the
+                                  Builder merged it, the Spec moves to the Publish Stage
+  factory approve change <spec> <change-file>
+                                  The Builder asked for a change at Approve: a new Ticket
+                                  in the Build Stage; the approve skill writes the file
+  factory next [--json]           Say the one thing to do now and which skill to use
+  factory board [--json] [--port <port>]
+                                  Open the board: every open Request and Ticket in its
+                                  Stage, why anything is stuck, and the one next action.
+                                  It runs until you stop it with Ctrl+C. --json prints
+                                  the board's data once instead
   factory review <url> [--json] [--check <id>]
                                   Run every Review check on the Site served at <url>,
                                   or only the ones named with --check
+  factory update                  Bring the newest Factory into the Site as a pull request
+                                  that lists what changed: skills, Review checks, Modern Web
+                                  Guidance and the DESIGN.md format. Nothing in the Site
+                                  changes until the Builder merges it
   factory --help                  Show this help
 
 factory review checks every route its Site links to; a route is the URL's path
@@ -51,6 +104,10 @@ Review checks: ${REVIEW_CHECKS.map((check) => check.id).join(", ")}.
 Exit codes of factory review: 0 the Site Passes, 1 it did not pass, 2 wrong usage,
 3 the review could not run (the Site could not be opened or the review stopped).
 `;
+
+const LOGIN_NEEDED = `Nothing is lost, but this is not on GitHub yet: your Requests, Specs and Tickets live as issues there, the way real teams track work, so this is the moment a GitHub login is needed.
+Log in by running this in your own terminal, because it opens a browser: gh auth login
+Then run this same command again.`;
 
 /** The review could not measure the Site at all: neither a Pass nor a fail, so it gets a code of its own. */
 const COULD_NOT_RUN = 3;
@@ -70,17 +127,176 @@ export async function factory(argv: string[], deps: FactoryDeps): Promise<number
   if (command === "kickoff") return kickoff(args, deps);
   if (command === "connect-host") return connectHost(deps);
   if (command === "publish") return publish(deps);
+  if (command === "request") return request(args, deps);
+  if (command === "spec") return spec(args, deps);
+  if (command === "design") return design(args, deps);
+  if (command === "approve") return approve(args, deps);
+  if (command === "next") return next(args, deps);
+  if (command === "board") return board(args, deps);
+  if (command === "update") return update(args, deps);
   if (command !== "loop") {
     deps.stderr(`factory does not know the command "${command}".\n\n${USAGE}`);
     return 2;
   }
 
-  const spec = Number(args[0]);
-  if (args.length !== 1 || !Number.isInteger(spec) || spec <= 0) {
+  const number = issueNumber(args[0]);
+  if (args.length !== 1 || number === undefined) {
     deps.stderr(`factory loop needs the number of the Spec to build, for example: factory loop 12\n\n${USAGE}`);
     return 2;
   }
-  return loop(spec, deps);
+  return loop(number, deps);
+}
+
+function issueNumber(text: string | undefined): number | undefined {
+  const number = Number(text);
+  return Number.isInteger(number) && number > 0 ? number : undefined;
+}
+
+async function request(args: string[], deps: FactoryDeps): Promise<number> {
+  const [file] = args;
+  if (file === undefined || args.length !== 1) {
+    deps.stderr(`factory request needs the file with the Request: factory request <request-file>\n\n${USAGE}`);
+    return 2;
+  }
+  return onTracker(deps, (tracker) => runRequest({ siteDir: deps.cwd, file, tracker, stdout: deps.stdout }));
+}
+
+async function spec(args: string[], deps: FactoryDeps): Promise<number> {
+  if (args[0] === "confirm") {
+    const number = issueNumber(args[1]);
+    if (args.length !== 2 || number === undefined) {
+      deps.stderr(`factory spec confirm needs the number of the Spec, for example: factory spec confirm 12\n\n${USAGE}`);
+      return 2;
+    }
+    return onTracker(deps, (tracker) => confirmCut({ spec: number, tracker, stdout: deps.stdout }));
+  }
+  const [file] = args;
+  if (file === undefined || args.length !== 1) {
+    deps.stderr(`factory spec needs the file with the Spec: factory spec <spec-file>\n\n${USAGE}`);
+    return 2;
+  }
+  return onTracker(deps, (tracker) => runSpec({ siteDir: deps.cwd, file, tracker, stdout: deps.stdout }));
+}
+
+async function designImport(args: string[], deps: FactoryDeps): Promise<number> {
+  const [tool, specNumber, source] = args;
+  const number = issueNumber(specNumber);
+  const known = IMPORT_TOOLS.find((name) => name === tool);
+  if (!known || number === undefined || args.length > 3 || (source === undefined && known !== "claude-design")) {
+    deps.stderr(`factory design import needs the tool, the number of the Spec and where the design came from, for example: factory design import figma 12 https://www.figma.com/design/abc\n\n${USAGE}`);
+    return 2;
+  }
+  return onTracker(deps, (tracker) => runDesignImport({ siteDir: deps.cwd, tool: known satisfies ImportTool, spec: number, source, tracker, clock: deps.clock ?? systemClock, stdout: deps.stdout }));
+}
+
+async function design(args: string[], deps: FactoryDeps): Promise<number> {
+  if (args[0] === "import") return designImport(args.slice(1), deps);
+  const approving = args[0] === "approve";
+  const number = issueNumber(args[approving ? 1 : 0]);
+  if (args.length !== (approving ? 2 : 1) || number === undefined) {
+    deps.stderr(`factory design needs the number of the Spec, for example: factory design 12\n\n${USAGE}`);
+    return 2;
+  }
+  if (approving) return onTracker(deps, (tracker) => approveDesign({ siteDir: deps.cwd, spec: number, tracker, stdout: deps.stdout }));
+  return onTracker(deps, (tracker) => runDesign({ siteDir: deps.cwd, spec: number, tracker, clock: deps.clock ?? systemClock, stdout: deps.stdout }));
+}
+
+async function approve(args: string[], deps: FactoryDeps): Promise<number> {
+  if (args[0] === "change") {
+    const number = issueNumber(args[1]);
+    const file = args[2];
+    if (args.length !== 3 || number === undefined || file === undefined) {
+      deps.stderr(`factory approve change needs the number of the Spec and the file with the change, for example: factory approve change 12 .factory/change.json\n\n${USAGE}`);
+      return 2;
+    }
+    return onTracker(deps, (tracker) => approveChange({ siteDir: deps.cwd, spec: number, file, tracker, stdout: deps.stdout }));
+  }
+  const number = issueNumber(args[0]);
+  if (args.length !== 1 || number === undefined) {
+    deps.stderr(`factory approve needs the number of the Spec, for example: factory approve 12\n\n${USAGE}`);
+    return 2;
+  }
+  return onTracker(deps, (tracker) => runApprove({ spec: number, tracker, stdout: deps.stdout }));
+}
+
+async function next(args: string[], deps: FactoryDeps): Promise<number> {
+  const json = args.includes("--json");
+  if (args.some((arg) => arg !== "--json")) {
+    deps.stderr(`factory next takes only --json.\n\n${USAGE}`);
+    return 2;
+  }
+  return onTracker(deps, async (tracker) => {
+    const step = await whatIsNext({ siteDir: deps.cwd, tracker, clock: deps.clock ?? systemClock });
+    deps.stdout(json ? `${JSON.stringify(step, null, 2)}\n` : formatNextStep(step));
+  });
+}
+
+async function update(args: string[], deps: FactoryDeps): Promise<number> {
+  if (args.length > 0) {
+    deps.stderr(`factory update takes nothing after it.\n\n${USAGE}`);
+    return 2;
+  }
+  const { releases } = deps;
+  if (!releases) {
+    deps.stderr("This version of the Factory cannot reach npm, so factory update cannot run.\n");
+    return 1;
+  }
+  return onTracker(deps, (tracker) => runUpdate({ siteDir: deps.cwd, tracker, releases, stdout: deps.stdout }));
+}
+
+/** A step that writes to GitHub: what stops it is printed for the Builder, and running it again finishes it. */
+async function onTracker(deps: FactoryDeps, step: (tracker: Tracker) => Promise<void>): Promise<number> {
+  if (!deps.tracker) {
+    deps.stderr("This version of the Factory cannot reach GitHub, so this command cannot run.\n");
+    return 1;
+  }
+  try {
+    await step(deps.tracker);
+    return 0;
+  } catch (error) {
+    if (error instanceof NotLoggedInError) {
+      deps.stderr(`${LOGIN_NEEDED}\n`);
+      return 1;
+    }
+    if (error instanceof PipelineError || error instanceof ConfigError || error instanceof ReviewError || error instanceof BoardError) {
+      deps.stderr(`${error.message}\n`);
+      return 1;
+    }
+    deps.stderr(`GitHub could not be reached, so this step is not finished: ${(error as Error).message}\nFix that, then run this same command again.\n`);
+    return 1;
+  }
+}
+
+async function board(args: string[], deps: FactoryDeps): Promise<number> {
+  const json = args.includes("--json");
+  const rest = args.filter((arg) => arg !== "--json");
+  const port = rest.length === 0 ? BOARD_PORT : rest.length === 2 && rest[0] === "--port" && /^\d+$/.test(rest[1]!) ? Number(rest[1]) : undefined;
+  if (port === undefined || port > 65535) {
+    deps.stderr(`factory board takes only --json and --port with a port number, for example: factory board --port 4401\n\n${USAGE}`);
+    return 2;
+  }
+  const clock = deps.clock ?? systemClock;
+  return onTracker(deps, async (tracker) => {
+    const read = () => readBoard({ siteDir: deps.cwd, tracker, clock });
+    // Read once first, so a missing login is said here and not only on the page.
+    const first = await read();
+    if (json) {
+      deps.stdout(`${JSON.stringify(first, null, 2)}\n`);
+      return;
+    }
+    const env = deps.env ?? process.env;
+    await serveBoard({
+      read,
+      port,
+      now: () => clock.now(),
+      stop: deps.stop,
+      opened: (actualPort) => {
+        const { url, codespace } = boardAddress(actualPort, env);
+        deps.stdout(`The board is open at ${url}\nIt stays open until you press Ctrl+C here.\n`);
+        if (!codespace) deps.openBrowser?.(url);
+      },
+    });
+  });
 }
 
 async function kickoff(args: string[], deps: FactoryDeps): Promise<number> {
@@ -177,7 +393,7 @@ async function loop(spec: number, deps: FactoryDeps): Promise<number> {
       deps.stdout(
         pr.opened
           ? `Spec #${spec} is built. Read its Preview at ${pr.preview}, then merge pull request #${pr.number} to Approve it: ${pr.url}\n`
-          : `Spec #${spec} is built and its pull request #${pr.number} is up to date: ${pr.url}\n`,
+          : `Spec #${spec} is built and its pull request #${pr.number} is up to date${pr.preview ? `, with a new Preview at ${pr.preview}` : ""}: ${pr.url}\n`,
       );
     }
     return result.parked.length + result.notPassed.length + result.blocked.length > 0 ? 1 : 0;

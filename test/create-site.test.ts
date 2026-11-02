@@ -77,7 +77,8 @@ describe("npm create web-factory", () => {
     });
 
     it("pins the Factory and leaves a working factory command", () => {
-      const manifest = JSON.parse(read(site, "package.json")) as { name: string; devDependencies: Record<string, string> };
+      const manifest = JSON.parse(read(site, "package.json")) as { name: string; scripts: Record<string, string>; devDependencies: Record<string, string> };
+      expect(manifest.scripts.board).toBe("factory board");
       expect(manifest.name).toBe("my-site");
       expect(manifest.devDependencies["@fabkrum/web-factory"]).toBe(FACTORY_VERSION);
       const lock = JSON.parse(read(site, "package-lock.json")) as { packages: Record<string, { version: string }> };
@@ -101,7 +102,7 @@ describe("npm create web-factory", () => {
     it("lets every Agent CLI find the same instructions and skills", () => {
       expect(existsSync(join(site, "AGENTS.md"))).toBe(true);
       expect(existsSync(join(site, ".agents/skills/modern-web-guidance/SKILL.md"))).toBe(true);
-      expect(read(site, ".agents/skills/kickoff/SKILL.md")).toMatch(/^---\nname: kickoff\n/);
+      for (const skill of ["next", "kickoff", "request", "spec", "design", "approve", "import-stitch", "import-figma", "import-claude-design"]) expect(read(site, `.agents/skills/${skill}/SKILL.md`)).toMatch(new RegExp(`^---\\nname: ${skill}\\n`));
       expect(read(site, "CLAUDE.md").split("\n")).toContain("@AGENTS.md");
       expect(lstatSync(join(site, ".claude/skills")).isSymbolicLink()).toBe(true);
       expect(readlinkSync(join(site, ".claude/skills"))).toBe("../.agents/skills");
@@ -116,6 +117,14 @@ describe("npm create web-factory", () => {
       expect(read(site, `${skill}/NOTICE`)).toContain("version 0.0.196");
       expect(read(site, `${skill}/THIRD_PARTY_NOTICES`)).toContain("@tensorflow/tfjs-core");
       expect(read(site, "THIRD-PARTY-NOTICES.md")).toMatch(/Modern Web Guidance[\s\S]*0\.0\.196[\s\S]*Apache License 2\.0/);
+    });
+
+    it("credits every skill adapted from Matt Pocock's and carries the MIT licence in full", () => {
+      const notices = read(site, "THIRD-PARTY-NOTICES.md");
+      for (const skill of ["next", "kickoff", "request", "spec", "design", "approve"]) expect(notices).toContain(`\`${skill}\``);
+      expect(notices).toContain("Copyright (c) 2026 Matt Pocock");
+      expect(notices).toContain("Permission is hereby granted, free of charge");
+      expect(notices).toContain('THE SOFTWARE IS PROVIDED "AS IS"');
     });
 
     it("runs the vendored Modern Web Guidance itself, never a newer version from npm", () => {
@@ -167,6 +176,39 @@ describe("npm create web-factory", () => {
     expect(lstatSync(join(site, ".claude/skills")).isSymbolicLink()).toBe(true);
     expect(existsSync(join(site, "node_modules/.bin/factory"))).toBe(true);
     expect(git(site, "status", "--porcelain")).toBe("");
+    expect(git(site, "log", "--format=%s")).toBe("Start the Site with the Factory");
+  });
+
+  it("finishes a run cut short while it wrote its very first file", async () => {
+    const site = join(root, "first-file");
+    mkdirSync(site);
+    writeFileSync(join(site, "package.json.tmp"), '{"na');
+
+    const result = await create("first-file");
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(site, "package.json.tmp"))).toBe(false);
+    expect(git(site, "status", "--porcelain")).toBe("");
+  });
+
+  it("repairs what a cut-short run left half done: a temporary link, npm's install, git's start and lock", async () => {
+    const site = join(root, "half-repaired");
+    expect((await create("half-repaired")).status).toBe(0);
+    rmSync(join(site, ".claude"), { recursive: true });
+    mkdirSync(join(site, ".claude"));
+    symlinkSync("nowhere", join(site, ".claude/skills.tmp"));
+    rmSync(join(site, "node_modules/.package-lock.json"));
+    rmSync(join(site, ".git"), { recursive: true });
+    mkdirSync(join(site, ".git"));
+    writeFileSync(join(site, ".git/index.lock"), "");
+
+    const second = await create("half-repaired");
+
+    expect(second.stderr).not.toMatch(/npm error/);
+    expect(second.status).toBe(0);
+    expect(existsSync(join(site, ".claude/skills.tmp"))).toBe(false);
+    expect(lstatSync(join(site, ".claude/skills")).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(site, "node_modules/.package-lock.json"))).toBe(true);
     expect(git(site, "log", "--format=%s")).toBe("Start the Site with the Factory");
   });
 });

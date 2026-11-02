@@ -10,6 +10,7 @@
   "files": [
     "bin",
     "dist",
+    "release.json",
     "template"
   ],
   "engines": {

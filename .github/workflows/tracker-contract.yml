@@ -7,12 +7,14 @@
 #   - a fine-grained token that may write that repository's issues, pull requests
 #     and contents, in the secret CONTRACT_GH_TOKEN.
 # Until both exist the test is skipped and says why in its title.
+#
+# Never on a pull request: a pull request runs its own code, and that code would
+# hold the token.
 name: Tracker contract
 
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 # One run at a time: the runs share the disposable repository's labels.

@@ -1,0 +1,18 @@
+{
+  "designFormat": "alpha",
+  "modernWebGuidance": "0.0.196",
+  "reviewChecks": [
+    "performance/lighthouse",
+    "accessibility/axe",
+    "visibility/sitemap",
+    "visibility/canonical",
+    "visibility/one-url",
+    "visibility/social-preview",
+    "visibility/structured-data",
+    "security/headers",
+    "code/console",
+    "security/advisories",
+    "code/site-tests",
+    "code/design"
+  ]
+}

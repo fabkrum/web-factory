@@ -20,6 +20,14 @@ Every terminal step you ask of the Builder is exactly one command.
 
 Every Request travels eight Stages: Request, Spec, Design, Build, Review, Approve, Publish, Measure. The Builder decides at Request, Spec, Design and Approve. The rest runs by itself.
 
+When the Builder brings an idea or a bug, follow the `request` skill in `.agents/skills/request`. To work a Request out, follow the `spec` skill in `.agents/skills/spec`. When a Spec waits in the Design Stage, follow the `design` skill in `.agents/skills/design`. When a Spec waits in the Approve Stage, follow the `approve` skill in `.agents/skills/approve`.
+
+When the Builder asks what to do now, or you do not know where the work stands, follow the `next` skill in `.agents/skills/next`.
+
+## The Design handoff
+
+The `design/` folder is the only design input for building: `DESIGN.md` is the source of colors, type and rules, `tokens.json` is generated from it, and `screenshots/` shows what the Builder approved per route. Build what they say, in the Site's own stack. Never copy `design/sample` or the tool code in `design/reference` into the Site: it is reference only, and a Review check fails a file copied from `design/reference`. The files in `design/assets` may be used. Never edit `tokens.json` by hand.
+
 ## Required reading: Modern Web Guidance
 
 Modern Web Guidance is the skill in `.agents/skills/modern-web-guidance`. It is required reading in the Spec, Design and Build Stages: follow its `SKILL.md` before you specify, design or build anything a Visitor sees. Say so when a choice goes against it, and why.

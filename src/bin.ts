@@ -1,5 +1,6 @@
 import type { AgentCli } from "./agent-cli.ts";
 import { ClaudeCode } from "./claude-code.ts";
+import { openInBrowser } from "./board.ts";
 import { factory } from "./cli.ts";
 import { Codex } from "./codex.ts";
 import { ConfigError, readAgentCliChoice, readHostChoice, type AgentCliName } from "./config.ts";
@@ -7,6 +8,7 @@ import { FirebaseHost } from "./firebase-host.ts";
 import { GitHubTracker } from "./github-tracker.ts";
 import { GoogleCli } from "./google-cli.ts";
 import { isFirebaseHosting } from "./host.ts";
+import { NpmReleases } from "./releases.ts";
 
 const ADAPTERS: Record<AgentCliName, () => AgentCli> = {
   "claude-code": () => new ClaudeCode(),
@@ -32,6 +34,8 @@ process.exitCode = await factory(process.argv.slice(2), {
   agentCli,
   tracker: new GitHubTracker({ cwd: process.cwd() }),
   host: hostChoice !== undefined && isFirebaseHosting(hostChoice) ? new FirebaseHost() : undefined,
+  releases: new NpmReleases({ cwd: process.cwd() }),
+  openBrowser: openInBrowser,
   stdout: (text) => process.stdout.write(text),
   stderr: (text) => process.stderr.write(text),
 });

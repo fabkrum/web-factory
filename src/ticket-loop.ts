@@ -5,18 +5,16 @@ import { clearCodeReview, codeReviewComment, codeReviewPrompt, isCodeReviewComme
 import type { SiteConfig } from "./config.ts";
 import { runGate } from "./gate.ts";
 import { branchExists, git, gitSucceeds, worktreeOf } from "./git.ts";
-import { recordTicketState, type TicketState } from "./loop-state.ts";
+import { LOCAL_DIR, recordTicketState, type TicketState } from "./loop-state.ts";
 import { couldNotRun, formatFailures } from "./review/report.ts";
 import type { ReviewReport } from "./review/review.ts";
+import { RunRecorder, runReportComment, saveRunReport } from "./run-report.ts";
 import { ServeError, withServedBuild } from "./served-build.ts";
 import { stageLabel } from "./stages.ts";
 import type { AgentCli } from "./agent-cli.ts";
 import type { Clock } from "./clock.ts";
 import { HostError, type Host } from "./host.ts";
 import type { Issue, IssueEvent, PullRequest, Tracker } from "./tracker.ts";
-
-/** Local, uncommitted Factory state in the Site repository: worktrees and the loop's state per Spec. */
-const LOCAL_DIR = ".factory";
 
 /** Runs the Review checks on the Site served at `url`, whose repository is `repo`. */
 export type ReviewSite = (url: URL, repo: string) => Promise<ReviewReport>;
@@ -45,10 +43,13 @@ export interface LoopResult {
 }
 
 export interface SpecPullRequest extends PullRequest {
-  /** The Preview URL from the host, or undefined when the pull request was already open from an earlier run and names it. */
+  /** The Preview URL from the host, or undefined when an earlier run's Preview still shows this pull request. */
   preview?: string;
   opened: boolean;
 }
+
+/** The loop's options once a run has begun, with what collects its Run report. */
+type InRun = LoopOptions & { run: RunRecorder };
 
 type Outcome = "passed" | "parked" | "not-passed";
 
@@ -82,7 +83,7 @@ export async function runTicketLoop(options: LoopOptions): Promise<LoopResult> {
     .sort((a, b) => a.number - b.number);
   const result: LoopResult = { passed: [], parked: [], notPassed: [], blocked: [] };
   if (tickets.length === 0 && !specDone(all)) {
-    log(`Spec #${spec} has no open Tickets in the Build Stage, so there is nothing to build.`);
+    log(`Spec #${spec} has no open Tickets in the Build Stage, so there is nothing to build. Tickets reach it once the Builder approves the Design.`);
     return result;
   }
 
@@ -98,6 +99,20 @@ export async function runTicketLoop(options: LoopOptions): Promise<LoopResult> {
     await git(siteDir, "branch", integration, config.baseBranch);
   }
 
+  const run = new RunRecorder(spec, options.clock.now());
+  try {
+    await buildTickets({ ...options, run }, all, tickets, result);
+  } catch (error) {
+    run.stoppedBecause((error as Error).message);
+    throw error;
+  } finally {
+    await reportRun(options, run, result);
+  }
+  return result;
+}
+
+async function buildTickets(options: InRun, all: Issue[], tickets: Issue[], result: LoopResult): Promise<void> {
+  const { spec, tracker, log } = options;
   // Lowest unblocked Ticket first, looking again after every Ticket: a Pass may unblock a lower one.
   const outcomes = new Map<number, Outcome>();
   const states = new Map(all.map((ticket) => [ticket.number, ticket.state]));
@@ -121,7 +136,26 @@ export async function runTicketLoop(options: LoopOptions): Promise<LoopResult> {
   if (specDone(await tracker.ticketsOf(spec))) {
     result.pullRequest = await openSpecPullRequest(options);
   }
-  return result;
+}
+
+/**
+ * Stores the Run report and puts it on the Spec. Neither may change how the run ended,
+ * so a failure here is said and goes no further; each still happens if the other fails.
+ */
+async function reportRun({ siteDir, spec, tracker, clock, log }: LoopOptions, run: RunRecorder, { pullRequest }: LoopResult): Promise<void> {
+  const shown = pullRequest && { number: pullRequest.number, url: pullRequest.url, ...(pullRequest.preview ? { preview: pullRequest.preview } : {}) };
+  const report = run.finish(clock.now(), shown);
+  try {
+    await saveRunReport(join(siteDir, LOCAL_DIR), report);
+  } catch (error) {
+    log(`The Run report could not be stored, so Measure and the board will not see this run: ${(error as Error).message}`);
+  }
+  try {
+    await tracker.comment(spec, runReportComment(report));
+    log(`Spec #${spec}: the Run report is on the Spec and on the board`);
+  } catch (error) {
+    log(`The Run report could not be put on Spec #${spec}: ${(error as Error).message}`);
+  }
 }
 
 function specDone(tickets: Issue[]): boolean {
@@ -177,11 +211,14 @@ async function whyBlocked(
 
 /**
  * Pushes the Spec's integration branch, and only it, and opens one pull request
- * against the base branch with the host's Preview URL. A rerun pushes again, renews
- * the Preview and finds the open pull request instead of opening a second one.
+ * against the base branch with the host's Preview URL. A rerun pushes again and
+ * finds the open pull request instead of opening a second one; unless its Preview
+ * already shows this commit, as after a change the Builder asked for or a deploy that
+ * failed, the Preview is made anew, since that is what the Builder reads. Either way
+ * the Spec now waits in the Approve Stage.
  */
 async function openSpecPullRequest(options: LoopOptions): Promise<SpecPullRequest | undefined> {
-  const { siteDir, spec, config, tracker, host, log } = options;
+  const { siteDir, spec, config, tracker, log } = options;
   const integration = integrationBranch(spec);
   if (!(await branchExists(siteDir, integration))) return undefined;
   if (await gitSucceeds(siteDir, "merge-base", "--is-ancestor", integration, config.baseBranch)) {
@@ -193,6 +230,7 @@ async function openSpecPullRequest(options: LoopOptions): Promise<SpecPullReques
       `Every Ticket of Spec #${spec} passed, but this Site repository has no remote called ${REMOTE}, so ${integration} cannot become a pull request. Connect the Site to GitHub, then run the Ticket loop again.`,
     );
   }
+  const tip = (await git(siteDir, "rev-parse", integration)).trim();
   // An explicit refspec, so the push can only ever move the integration branch on the remote.
   try {
     await git(siteDir, "push", "--quiet", REMOTE, `refs/heads/${integration}:refs/heads/${integration}`);
@@ -201,31 +239,23 @@ async function openSpecPullRequest(options: LoopOptions): Promise<SpecPullReques
   }
 
   const existing = await tracker.pullRequestFrom(integration);
-  if (existing) {
-    // The pull request names the branch's Preview: it must show what was just pushed.
-    await deployPreview(options);
-    log(`Spec #${spec}: pushed ${integration}, which updates its pull request #${existing.number} and its Preview`);
+  if (existing?.body.includes(previewedCommit(tip))) {
+    log(`Spec #${spec}: pushed ${integration}, which holds nothing new for its pull request #${existing.number}`);
+    await tracker.moveToStage(spec, "approve");
     return { ...existing, opened: false };
   }
   const preview = await deployPreview(options);
-  const specIssue = await tracker.getIssue(spec);
-  const tickets = (await tracker.ticketsOf(spec)).sort((a, b) => a.number - b.number);
-  const pullRequest = await tracker.openPullRequest({
-    head: integration,
-    base: config.baseBranch,
-    title: specIssue.title,
-    body: [
-      `Every Ticket of Spec #${spec} passed the Ticket loop, and this pull request holds them all.`,
-      "",
-      `Preview: ${preview}`,
-      "",
-      "Tickets:",
-      ...tickets.map((ticket) => `- #${ticket.number} ${ticket.title}`),
-      "",
-      `Read the Preview. When the Site does what Spec #${spec} asks, merge this pull request to Approve it.`,
-    ].join("\n"),
-  });
+  const body = await pullRequestBody(options, preview, tip);
+  if (existing) {
+    await tracker.updatePullRequest(existing.number, { body });
+    log(`Spec #${spec}: pushed ${integration}, which updates its pull request #${existing.number}, with the new Preview ${preview}`);
+    await tracker.moveToStage(spec, "approve");
+    return { ...existing, body, preview, opened: false };
+  }
+  const { title } = await tracker.getIssue(spec);
+  const pullRequest = await tracker.openPullRequest({ head: integration, base: config.baseBranch, title, body });
   log(`Spec #${spec}: opened pull request #${pullRequest.number} with the Preview ${preview}`);
+  await tracker.moveToStage(spec, "approve");
   return { ...pullRequest, preview, opened: true };
 }
 
@@ -238,8 +268,32 @@ async function deployPreview({ siteDir, spec, host }: LoopOptions): Promise<stri
   }
 }
 
-async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome> {
-  const { siteDir, spec, config, agentCli, log } = options;
+/** Hidden in the pull request's body: the commit its Preview shows, which a failed deploy leaves behind the branch. */
+const previewedCommit = (commit: string): string => `<!-- factory:preview-of ${commit} -->`;
+
+async function pullRequestBody({ spec, tracker }: LoopOptions, preview: string, commit: string): Promise<string> {
+  const tickets = (await tracker.ticketsOf(spec)).sort((a, b) => a.number - b.number);
+  return [
+    `Every Ticket of Spec #${spec} passed the Ticket loop, and this pull request holds them all.`,
+    "",
+    `Preview: ${preview}`,
+    "",
+    "Tickets:",
+    ...tickets.map((ticket) => `- #${ticket.number} ${ticket.title}`),
+    "",
+    `Read the Preview. When the Site does what Spec #${spec} asks, merge this pull request to Approve it.`,
+    "",
+    previewedCommit(commit),
+  ].join("\n");
+}
+
+/** The Preview's address, as the Ticket loop wrote it in the pull request. */
+export function previewIn(body: string): string | undefined {
+  return /^Preview: (\S+)$/m.exec(body)?.[1];
+}
+
+async function buildTicket(ticket: Issue, options: InRun): Promise<Outcome> {
+  const { siteDir, spec, config, agentCli, log, run } = options;
   const integration = integrationBranch(spec);
   const branch = ticketBranch(ticket.number);
 
@@ -259,7 +313,8 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
   // A parked Ticket waits for the Builder: until something happens on it after the park comment.
   const parkedFor = stillParked(history);
   if (parkedFor !== undefined) {
-    log(`Ticket #${ticket.number}: parked, waiting for you. ${firstLine(parkedFor)}`);
+    log(`Ticket #${ticket.number}: parked, waiting for you. ${firstLine(parkedFor.reason)}`);
+    run.ticketState(ticket, { status: "parked", attempts: 0, reason: parkedFor.reason });
     return "parked";
   }
 
@@ -282,6 +337,7 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
   // Every fix round works in the same worktree, so it sees what the attempt before left.
   const worktree = await openWorktree(siteDir, ticket.number, integration);
   let reason = "";
+  let failingChecks: string[] | undefined;
   for (let attempt = 1; attempt <= config.maxAttempts; attempt++) {
     const catchUp = await catchUpWith(worktree, integration);
     const base = await git(siteDir, "rev-parse", integration);
@@ -290,7 +346,7 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
         ? `Ticket #${ticket.number}: building on ${branch} in ${relative(siteDir, worktree)}`
         : `Ticket #${ticket.number}: fix round ${attempt - 1}, back to Build with the failing reason`,
     );
-    await record(options, ticket, { status: "building", attempts: attempt });
+    await record(options, ticket, { status: "building", attempts: attempt, reason: reason || undefined, failingChecks });
 
     const session = await agentCli.runSession({
       cwd: worktree,
@@ -310,7 +366,7 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
     }
     if (session.kind === "rate-limited") {
       // Hitting the plan's limit is not the Ticket's failure: wait it out and resume the same attempt.
-      await waitOutRateLimit(ticket, options, attempt, session.until);
+      await waitOutRateLimit(ticket, options, attempt, session.until, failingChecks);
       attempt--;
       continue;
     }
@@ -320,7 +376,12 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
         ? { passed: false as const, reason: `The Build session failed: ${session.reason}` }
         : await runGate(worktree, base, branch, integration, config.testCommand);
     if (gate.passed) {
-      await record(options, ticket, { status: "reviewing", attempts: attempt });
+      if (gate.flaky !== undefined) {
+        log(`Ticket #${ticket.number}: the tests were red, then green on the rerun, so they are recorded as flaky`);
+        run.flaky(ticket, gate.flaky);
+      }
+      const flaky = gate.flaky === undefined ? {} : { flaky: gate.flaky };
+      await record(options, ticket, { status: "reviewing", attempts: attempt, reason: reason || undefined, failingChecks, ...flaky });
       const review = await reviewTicket(ticket, options, worktree, base, gate.head, attempt);
       if ("question" in review) {
         return park(ticket, options, attempt, `The code review needs a decision from you: ${review.question}`, [
@@ -334,19 +395,23 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
       if (review.failed === undefined) {
         // Recorded before anything moves, so a run that dies before the Pass comment finishes it next time.
         await git(siteDir, "update-ref", passRef(ticket.number), gate.head);
-        const refused = await finishPass(ticket, options, gate.head);
+        const refused = await finishPass(ticket, options, gate.head, gate.flaky !== undefined);
         if (refused === undefined) {
-          await record(options, ticket, { status: "passed", attempts: attempt });
+          await record(options, ticket, { status: "passed", attempts: attempt, ...flaky });
           return "passed";
         }
         reason = refused;
+        failingChecks = undefined;
       } else {
         reason = review.failed;
+        failingChecks = review.failingChecks;
       }
     } else {
       reason = gate.reason;
+      failingChecks = undefined;
     }
     log(`Ticket #${ticket.number}: not passed. ${firstLine(reason)}`);
+    run.failedAttempt(ticket, attempt, reason, failingChecks);
     previous = `Your last attempt did not pass: ${reason}\n\nFix exactly that.`;
   }
 
@@ -357,37 +422,39 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
     "",
     `The work so far stays on \`${branch}\` in \`${relative(siteDir, worktree)}\`. ` +
       "Say in a comment on this Ticket what should change, then run the Ticket loop again.",
-  ]);
+  ], failingChecks);
 }
 
-type ReviewOutcome = { failed?: string } | { question: string };
+type ReviewOutcome = { failed?: string; failingChecks?: string[] } | { question: string };
 
 /**
  * A Ticket's Review of the commit its gate tested: the Review checks on its served build,
  * then the code review. The code review only ever runs on green checks, so no verdict of
  * its own can stand in for them. Whatever Review leaves in the worktree goes again.
  */
-async function reviewTicket(ticket: Issue, options: LoopOptions, worktree: string, base: string, head: string, attempt: number): Promise<ReviewOutcome> {
+async function reviewTicket(ticket: Issue, options: InRun, worktree: string, base: string, head: string, attempt: number): Promise<ReviewOutcome> {
   try {
     const failed = await runReviewChecks(options, worktree);
-    if (failed !== undefined) return { failed };
+    if (failed !== undefined) return failed;
     return await runCodeReview(ticket, options, worktree, base, head, attempt);
   } finally {
     await restoreWorktree(worktree, ticketBranch(ticket.number), head);
   }
 }
 
-/** Why the Ticket's served build failed its Review checks, or undefined when it passed them. */
-async function runReviewChecks({ config, reviewSite }: LoopOptions, worktree: string): Promise<string | undefined> {
+/** Why the Ticket's served build failed its Review checks and which ones, or undefined when it passed them. */
+async function runReviewChecks({ config, reviewSite }: LoopOptions, worktree: string): Promise<{ failed: string; failingChecks?: string[] } | undefined> {
   try {
     const report = await withServedBuild(worktree, config, (url) => reviewSite(url, worktree));
-    return report.passed ? undefined : formatFailures(report);
+    if (report.passed) return undefined;
+    const failing = report.areas.flatMap((area) => area.checks).filter((check) => !check.passed);
+    return { failed: formatFailures(report), failingChecks: failing.map((check) => check.name) };
   } catch (error) {
-    return error instanceof ServeError ? error.message : couldNotRun(error);
+    return { failed: error instanceof ServeError ? error.message : couldNotRun(error) };
   }
 }
 
-async function runCodeReview(ticket: Issue, options: LoopOptions, worktree: string, base: string, head: string, attempt: number): Promise<ReviewOutcome> {
+async function runCodeReview(ticket: Issue, options: InRun, worktree: string, base: string, head: string, attempt: number): Promise<ReviewOutcome> {
   const { agentCli, config, tracker, log } = options;
   for (;;) {
     await clearCodeReview(worktree);
@@ -422,53 +489,78 @@ async function restoreWorktree(worktree: string, branch: string, head: string): 
 }
 
 /** Sleeps until the Agent CLI's rate limit lifts, showing the Ticket as waiting on the board meanwhile. */
-async function waitOutRateLimit(ticket: Issue, options: LoopOptions, attempt: number, until: Date): Promise<void> {
+async function waitOutRateLimit(ticket: Issue, options: InRun, attempt: number, until: Date, failingChecks?: string[]): Promise<void> {
   const { clock, log } = options;
   const ms = Math.max(until.getTime() - clock.now().getTime(), MIN_RATE_LIMIT_WAIT_MS);
   const resume = new Date(clock.now().getTime() + ms);
   const reason = `The Agent CLI hit its plan's rate limit, so the Ticket loop waits until ${resume.toISOString()} and then resumes this Ticket.`;
   log(`Ticket #${ticket.number}: ${reason}`);
-  await record(options, ticket, { status: "waiting", attempts: attempt, reason });
+  await record(options, ticket, { status: "waiting", attempts: attempt, reason, resumeAt: resume.toISOString(), failingChecks });
   await clock.sleep(ms);
+  options.run.waited(ticket, ms);
   log(`Ticket #${ticket.number}: the rate limit has lifted, resuming`);
 }
 
 /** Leaves the Ticket open in its Stage, says why on it, and marks it parked for the board. */
-async function park(ticket: Issue, options: LoopOptions, attempts: number, reason: string, comment: string[]): Promise<Outcome> {
+async function park(ticket: Issue, options: InRun, attempts: number, reason: string, comment: string[], failingChecks?: string[]): Promise<Outcome> {
   options.log(`Ticket #${ticket.number}: parked. ${firstLine(reason)}`);
-  await options.tracker.comment(ticket.number, `${PARKED} ${comment.join("\n")}`);
-  await record(options, ticket, { status: "parked", attempts, reason });
+  await options.tracker.comment(ticket.number, `${PARKED} ${comment.join("\n")}\n\n<!-- factory attempts: ${attempts} -->`);
+  await record(options, ticket, { status: "parked", attempts, reason, failingChecks });
   return "parked";
 }
 
-async function record(options: LoopOptions, ticket: Issue, state: TicketState): Promise<void> {
+async function record(options: InRun, ticket: Issue, state: TicketState): Promise<void> {
+  options.run.ticketState(ticket, state);
   await recordTicketState(join(options.siteDir, LOCAL_DIR), options.spec, ticket.number, state);
 }
 
 const PARKED = "Parked.";
 
-/** The park comment, when it is the last thing that happened on the Ticket. */
-function stillParked(history: IssueEvent[]): string | undefined {
+/** The attempt count at the end of a park comment, hidden from the page so another machine's board can read it. */
+const PARK_ATTEMPTS = /\s*<!-- factory attempts: (\d+) -->\s*$/;
+
+/**
+ * The park comment, when it is the last thing that happened on the Ticket. `attempts` is
+ * missing when the comment carries no count, as one written by hand does.
+ */
+export function stillParked(history: IssueEvent[]): { reason: string; attempts?: number } | undefined {
   const last = history.at(-1);
-  return last?.kind === "comment" && last.body.startsWith(PARKED) ? last.body.slice(PARKED.length).trim() : undefined;
+  return last?.kind === "comment" && last.body.startsWith(PARKED) ? readPark(last.body) : undefined;
+}
+
+function readPark(comment: string): { reason: string; attempts?: number } {
+  const body = comment.slice(PARKED.length);
+  const count = PARK_ATTEMPTS.exec(body)?.[1];
+  return { reason: body.replace(PARK_ATTEMPTS, "").trim(), ...(count === undefined ? {} : { attempts: Number(count) }) };
+}
+
+/**
+ * The last park on the Ticket, also when something happened after it: `since` is what did,
+ * without the loop's own code review comments, which answer nothing. A Pass since the park
+ * settled it, so there is none then. The board reads this; `stillParked` is the loop's gate.
+ */
+export function lastPark(history: IssueEvent[]): { comment: string; reason: string; attempts?: number; since: IssueEvent[] } | undefined {
+  const at = history.findLastIndex((event) => event.kind === "comment" && event.body.startsWith(PARKED));
+  if (at === -1) return undefined;
+  const since = history.slice(at + 1).filter((event) => event.kind !== "comment" || !isCodeReviewComment(event.body));
+  if (since.some((event) => event.kind === "comment" && PASS_COMMENT.test(event.body))) return undefined;
+  const comment = (history[at] as { body: string }).body;
+  return { comment, ...readPark(comment), since };
 }
 
 /** What the session needs to know when the Builder answered a park: the park comment and everything said since. */
 function answeredPark(history: IssueEvent[]): string | undefined {
-  const at = history.findLastIndex((event) => event.kind === "comment" && event.body.startsWith(PARKED));
-  if (at === -1) return undefined;
-  const since = history.slice(at + 1).flatMap((event) => (event.kind === "comment" && !isCodeReviewComment(event.body) ? [event.body] : []));
-  // A Pass since the park settled it; what came after is not an answer to it.
-  if (since.length === 0 || since.some((body) => PASS_COMMENT.test(body))) return undefined;
-  const parked = history[at] as { body: string };
+  const park = lastPark(history);
+  const said = park?.since.flatMap((event) => (event.kind === "comment" ? [event.body] : [])) ?? [];
+  if (!park || said.length === 0) return undefined;
   return [
     "This Ticket was parked last time, with this on the Ticket:",
     "",
-    parked.body,
+    park.comment,
     "",
     "The Builder answered since. Build exactly what the answer says:",
     "",
-    ...since,
+    ...said,
   ].join("\n");
 }
 
@@ -499,7 +591,7 @@ async function refTarget(siteDir: string, ref: string): Promise<string | undefin
  * Once the Pass comment is posted it is the record: the pass ref goes, and a rerun
  * that finds the comment last on the open Ticket only closes it.
  */
-async function finishPass(ticket: Issue, options: LoopOptions, head: string): Promise<string | undefined> {
+async function finishPass(ticket: Issue, options: LoopOptions, head: string, flaky = false): Promise<string | undefined> {
   const { siteDir, spec, tracker } = options;
   const integration = integrationBranch(spec);
   const branch = ticketBranch(ticket.number);
@@ -518,7 +610,7 @@ async function finishPass(ticket: Issue, options: LoopOptions, head: string): Pr
   if (worktree) await git(siteDir, "worktree", "remove", "--force", worktree);
   await tracker.comment(
     ticket.number,
-    `Pass. The Ticket loop built this Ticket on \`${branch}\`, its gate was green, and \`${integration}\` now contains it (${head}).`,
+    `Pass. The Ticket loop built this Ticket on \`${branch}\`, its gate was green${flaky ? " (the tests were red once and green on the rerun, recorded as flaky)" : ""}, and \`${integration}\` now contains it (${head}).`,
   );
   await git(siteDir, "update-ref", "-d", passRef(ticket.number));
   await closeAsPass(ticket, options);
