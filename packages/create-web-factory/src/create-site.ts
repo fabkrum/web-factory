@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { copyFile, lstat, mkdir, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -75,7 +75,8 @@ async function refuseSomeoneElsesFolder(site: string): Promise<void> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw new CreateError(`${site} cannot be used as a folder for a Site: ${(error as Error).message}`);
   }
-  if (entries.every((entry) => entry === ".git")) return;
+  // package.json.tmp alone is a run cut short while writing its very first file.
+  if (entries.every((entry) => entry === ".git" || entry === "package.json.tmp")) return;
   if (!(await dependsOnFactory(site))) {
     throw new CreateError(`${site} already holds files and is not a Site, so nothing was changed. Choose a new folder name.`);
   }
@@ -111,6 +112,7 @@ async function addMissingFiles(site: string): Promise<string[]> {
     if (await exists(target)) return;
     await mkdir(dirname(target), { recursive: true });
     // Through a temporary name, so a run cut short never leaves half a file that counts as there.
+    await rm(`${target}.tmp`, { force: true });
     await write(`${target}.tmp`);
     await rename(`${target}.tmp`, target);
     added.push(path);
@@ -153,13 +155,15 @@ async function exists(path: string): Promise<boolean> {
 }
 
 async function initialiseGit(site: string): Promise<boolean> {
-  if (await exists(join(site, ".git"))) return false;
+  // Without HEAD, an earlier `git init` never finished; running it again is safe.
+  if (await exists(join(site, ".git", "HEAD"))) return false;
   await run("git", ["init", "-q", "-b", "main"], { cwd: site });
   return true;
 }
 
 async function installFactory(site: string, deps: CreateDeps): Promise<boolean> {
-  if (await exists(join(site, "node_modules", ".bin", "factory"))) return false;
+  // npm writes its hidden lockfile last, so an install cut short has the command but not this file.
+  if ((await exists(join(site, "node_modules", ".bin", "factory"))) && (await exists(join(site, "node_modules", ".package-lock.json")))) return false;
   deps.stdout("Installing the Factory. This can take a few minutes.\n");
   try {
     await run("npm", ["install", "--no-audit", "--no-fund"], { cwd: site, maxBuffer: 64 * 1024 * 1024 });
@@ -178,6 +182,8 @@ async function commitFirstVersion(site: string): Promise<boolean> {
   } catch {
     // No commit yet, which is what this step is for.
   }
+  // With no commit yet, a lock can only be what an earlier run left when it was cut short.
+  await rm(join(site, ".git", "index.lock"), { force: true });
   const hasIdentity = await run("git", ["config", "user.email"], { cwd: site }).then(
     () => true,
     () => false,

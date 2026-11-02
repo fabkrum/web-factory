@@ -1,0 +1,78 @@
+# What keeps the two ways in working, and the Factory free of anything personal.
+# Nothing here needs a secret or an account.
+name: Factory
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nothing-personal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/check-personal.mjs
+
+  codespace-template:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install --global @devcontainers/cli
+      - name: Build the dev container every Site carries
+        run: devcontainer build --workspace-folder packages/create-web-factory/template --image-name web-factory-site
+      - name: Everything a Builder needs is in it
+        run: docker run --rm web-factory-site sh -c 'git --version && node --version && gh --version && claude --version && codex --version && gemini --version && agy --version'
+
+  # The runner's own tools would hide what a Builder lacks, so this job starts from an empty
+  # container and runs the installer without the Node that serves the packages on its PATH.
+  installer-linux:
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: [claude-code, codex, antigravity, gemini]
+    steps:
+      - run: apt-get update -qq && apt-get install -y -qq curl ca-certificates
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Serve the Factory as if it were published
+        run: |
+          node test/ci/serve-factory.ts > "$RUNNER_TEMP/registry" &
+          until [ -s "$RUNNER_TEMP/registry" ]; do sleep 1; done
+      - name: Run the installer twice
+        run: |
+          registry=$(cat "$RUNNER_TEMP/registry")
+          env PATH=/usr/sbin:/usr/bin:/sbin:/bin AGENT=${{ matrix.agent }} npm_config_registry="$registry" sh test/ci/installer-twice.sh
+
+  installer-macos:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: [claude-code, codex, antigravity, gemini]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Serve the Factory as if it were published
+        run: |
+          node test/ci/serve-factory.ts > "$RUNNER_TEMP/registry" &
+          until [ -s "$RUNNER_TEMP/registry" ]; do sleep 1; done
+      - name: Run the installer twice, without the runner's own Node and GitHub CLI
+        run: |
+          registry=$(cat "$RUNNER_TEMP/registry")
+          env PATH=/usr/sbin:/usr/bin:/sbin:/bin AGENT=${{ matrix.agent }} npm_config_registry="$registry" sh test/ci/installer-twice.sh

@@ -170,6 +170,39 @@ describe("npm create web-factory", () => {
     expect(git(site, "status", "--porcelain")).toBe("");
     expect(git(site, "log", "--format=%s")).toBe("Start the Site with the Factory");
   });
+
+  it("finishes a run cut short while it wrote its very first file", async () => {
+    const site = join(root, "first-file");
+    mkdirSync(site);
+    writeFileSync(join(site, "package.json.tmp"), '{"na');
+
+    const result = await create("first-file");
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(site, "package.json.tmp"))).toBe(false);
+    expect(git(site, "status", "--porcelain")).toBe("");
+  });
+
+  it("repairs what a cut-short run left half done: a temporary link, npm's install, git's start and lock", async () => {
+    const site = join(root, "half-repaired");
+    expect((await create("half-repaired")).status).toBe(0);
+    rmSync(join(site, ".claude"), { recursive: true });
+    mkdirSync(join(site, ".claude"));
+    symlinkSync("nowhere", join(site, ".claude/skills.tmp"));
+    rmSync(join(site, "node_modules/.package-lock.json"));
+    rmSync(join(site, ".git"), { recursive: true });
+    mkdirSync(join(site, ".git"));
+    writeFileSync(join(site, ".git/index.lock"), "");
+
+    const second = await create("half-repaired");
+
+    expect(second.stderr).not.toMatch(/npm error/);
+    expect(second.status).toBe(0);
+    expect(existsSync(join(site, ".claude/skills.tmp"))).toBe(false);
+    expect(lstatSync(join(site, ".claude/skills")).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(site, "node_modules/.package-lock.json"))).toBe(true);
+    expect(git(site, "log", "--format=%s")).toBe("Start the Site with the Factory");
+  });
 });
 
 describe("create-web-factory refuses", () => {

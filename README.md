@@ -8,9 +8,42 @@ MIT, see [LICENSE](LICENSE).
 
 ## Start a Site
 
+There are two ways in, and both end in the same Site repository. Choose the Codespace if you are on Windows or a Chromebook, want to try things quickly, or do not want to install anything: it runs in your browser, but it stops when it sits idle and uses up your free GitHub hours, so it does not suit a Ticket loop that runs overnight. Choose the local install if you have a Mac, Linux or Windows with WSL and want to leave a Ticket loop running overnight: your own computer has to stay on, but nothing stops it and no hours run out.
+
+Native Windows is not supported in v1. On Windows, use the Codespace, or install WSL and follow the local install inside it.
+
+### In a Codespace
+
+Open the [template](https://github.com/fabkrum/web-factory-template), press **Use this template**, then **Create a new repository**. In your new repository press **Code**, then **Codespaces**, then **Create codespace**. Git, Node, the GitHub CLI and all four Agent CLIs are already there, and the Site's first install runs by itself.
+
+### On your own computer
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/fabkrum/web-factory/main/install.sh | sh -s -- my-site
+```
+
+This one command asks which Agent CLI you use, with no default. It then installs whatever is missing of git, Node, the GitHub CLI and that Agent CLI, and creates your Site in the folder `my-site`. Node and the GitHub CLI go into `~/.web-factory`, so they need no administrator password; on Linux, git may ask for one. It ends by telling you what to do next.
+
+It is safe to run again. If an earlier run stopped halfway, the same command notices, repairs what was left and finishes the job. If everything is already there, it changes nothing.
+
+If you already have Node 22.19 or later and git, this does the Site part alone:
+
 ```sh
 npm create web-factory@latest my-site
 ```
+
+### What each Agent CLI costs
+
+As of 2026-11-02. These offers change often, so check the provider's own pricing page before you pay for anything.
+
+| Agent CLI | What you need | What it costs | Good to know |
+| --- | --- | --- | --- |
+| Antigravity CLI | A free Google account | Free | Google does not publish its weekly limit, so a long Ticket loop may have to wait for it. |
+| Codex | ChatGPT Free or Go | Free, or about $8 a month for Go | Limited use, and OpenAI may change it. Paid plans from Plus upward raise the limits. |
+| Claude Code | Claude Pro, or a paid API key | $20 a month, or pay per use with the key | There is no free plan. |
+| Gemini CLI | A paid API key | Pay per use | Free Google accounts lost access on 2026-06-18; use Antigravity CLI with those. |
+
+### What you get
 
 This creates a Site repository in `my-site`: the Factory pinned as a dependency with its `factory` command, one AGENTS.md, the shared skills folder `.agents/skills`, and Modern Web Guidance vendored there at a pinned version with its licence and notice. Claude Code reaches the same instructions and skills through a CLAUDE.md that imports AGENTS.md and the link `.claude/skills`; Gemini CLI through `.gemini/settings.json`. Running the command again adds only what is missing, so it finishes a run that was cut short and changes nothing in a finished Site.
 
@@ -62,6 +95,10 @@ The Site pins its Factory exactly in `package.json`; the Review checks and the D
 
 The facts each release pins are in `packages/create-web-factory/release.json`, published with the starter; a test keeps them equal to the code. The update reads the Site's first files from the starter package at the pinned version and at the newest one, on npm.
 
+## Report a bug
+
+Something did not work? [Open a bug report](https://github.com/fabkrum/web-factory/issues/new?template=bug_report.yml). Plain words are fine.
+
 ## Development
 
 The Factory package is `@fabkrum/web-factory`, with the command `factory`. It is written in TypeScript for Node 22.19 or later.
@@ -69,6 +106,9 @@ The Factory package is `@fabkrum/web-factory`, with the command `factory`. It is
 - `npm test` runs the tests. The Ticket loop is tested through the `factory` command in a throwaway Site repository, with a scripted fake Agent CLI and an in-memory fake tracker (`test/harness/`).
 - `npm run typecheck` checks the types.
 - `npm run build` compiles `src/` to `dist/`, which `bin/factory.js` runs.
+- `node scripts/check-personal.mjs` fails when a tracked file holds anything personal. CI runs it, builds the Codespace's dev container and runs the installer twice on clean macOS and Linux runners (`.github/workflows/factory.yml`).
+
+The Codespace's dev container is in the starter's `template/` folder, so every Site carries it. The template repository is the output of `npm create web-factory@latest web-factory-template`, pushed to GitHub with **Template repository** ticked in its settings. It moves to a new Factory like any other Site, through `factory update`.
 
 The starter package `create-web-factory` lives in `packages/create-web-factory`, with the Site's first files in its `template/` folder. It pins the Factory to its own version, so the two packages are always released together at one version. `npm pack` builds either package.
 

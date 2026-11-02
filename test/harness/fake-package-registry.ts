@@ -16,8 +16,11 @@ export interface FakePackageRegistry {
   close: () => Promise<void>;
 }
 
-/** A local stand-in for the npm registry, serving packed packages as their only version, tagged latest. */
-export async function serveFakePackageRegistry(packages: PublishedPackage[]): Promise<FakePackageRegistry> {
+/**
+ * A local stand-in for the npm registry, serving packed packages as their only version, tagged
+ * latest. Anything else is a 404, or is sent on to `fallback` when there is one.
+ */
+export async function serveFakePackageRegistry(packages: PublishedPackage[], options: { fallback?: string } = {}): Promise<FakePackageRegistry> {
   const documents = new Map<string, unknown>();
   const tarballs = new Map<string, Buffer>();
   const server = createServer((request, response) => {
@@ -26,6 +29,7 @@ export async function serveFakePackageRegistry(packages: PublishedPackage[]): Pr
     const document = documents.get(path);
     if (tarball) response.end(tarball);
     else if (document) response.setHeader("content-type", "application/json").end(JSON.stringify(document));
+    else if (options.fallback) response.writeHead(302, { location: `${options.fallback}${request.url}` }).end();
     else response.writeHead(404).end("{}");
   });
   await new Promise<void>((listening) => server.listen(0, "127.0.0.1", listening));
