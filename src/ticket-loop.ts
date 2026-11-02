@@ -106,8 +106,7 @@ export async function runTicketLoop(options: LoopOptions): Promise<LoopResult> {
     run.stoppedBecause((error as Error).message);
     throw error;
   } finally {
-    // With no Ticket to build, this run only repaired the Spec's pull request.
-    if (tickets.length > 0) await reportRun(options, run, result);
+    await reportRun(options, run, result);
   }
   return result;
 }

@@ -143,6 +143,36 @@ describe("the Run report after a run", () => {
     expect(tracker.issue(spec).comments[0]).toContain(host.previews[0]?.url);
   });
 
+  it("reports the run that repairs the pull request, so the board and the Spec no longer say the run stopped", async () => {
+    const site = createSiteRepo({ testCommand: "true" });
+    const fake = new FakeTracker();
+    const spec = fake.addSpec("A greeting page");
+    fake.addTicket(spec, "Say hello");
+    const host = new FakeHost();
+    const prFails: Tracker = {
+      ...delegateTo(fake),
+      openPullRequest: async () => {
+        throw new Error("GitHub is down");
+      },
+    };
+    await expect(runFactory(["loop", String(spec)], { cwd: site, agentCli: new FakeAgentCli(builds("hello.txt")), tracker: prFails, host })).rejects.toThrow("GitHub is down");
+    expect(fake.issue(spec).comments.at(-1)).toContain("stopped before it was through: GitHub is down");
+
+    const rerun = await runFactory(["loop", String(spec)], { cwd: site, agentCli: new FakeAgentCli(), tracker: fake, host });
+
+    expect(rerun.exitCode, rerun.stderr).toBe(0);
+    const pullRequest = fake.pullRequests[0]!;
+    const repair = (await stored(site)).at(-1);
+    expect(repair).toMatchObject({ run: 2, tickets: [], pullRequest: { number: pullRequest.number, url: pullRequest.url } });
+    expect(repair?.stopped).toBeUndefined();
+    expect(fake.issue(spec).comments).toHaveLength(2);
+    expect(fake.issue(spec).comments.at(-1)).toContain(`pull request #${pullRequest.number}`);
+    expect(fake.issue(spec).comments.at(-1)).not.toContain("stopped");
+    const [shown] = (await boardOf(site, fake)).runReports;
+    expect(shown?.summary).toBe("No Ticket left to build.");
+    expect(shown?.details).toContain(`pull request #${pullRequest.number}`);
+  });
+
   it("reports a Ticket that is still parked, and one waiting for it, without counting an attempt", async () => {
     const site = createSiteRepo({ testCommand: "true" });
     const tracker = new FakeTracker();
@@ -160,6 +190,33 @@ describe("the Run report after a run", () => {
       { ticket: second, outcome: "blocked", attempts: 0, reason: expect.stringContaining(`#${first}`) },
     ]);
     expect(tracker.issue(spec).comments.at(-1)).toMatch(/Not started:\n.*It waits for/);
+    expect(tracker.issue(spec).comments.at(-1)).toContain(QUESTION);
+  });
+
+  it("keeps the reason of a Ticket still parked after its attempts ran out, past every line that only introduces the next", async () => {
+    const site = createSiteRepo({ testCommand: "true", maxAttempts: 1 });
+    const tracker = new FakeTracker();
+    const spec = tracker.addSpec("A greeting page");
+    tracker.addTicket(spec, "Say hello");
+    const agentCli = new FakeAgentCli(builds("one.txt")).reviewing(requestsChanges([{ text: "Name the page" }]));
+    await runFactory(["loop", String(spec)], { cwd: site, agentCli, tracker });
+
+    await runFactory(["loop", String(spec)], { cwd: site, agentCli: new FakeAgentCli(), tracker });
+
+    const comment = tracker.issue(spec).comments.at(-1);
+    expect(comment).toMatch(/The last reason: The code review sent this Ticket back: .*Name the page/);
+  });
+
+  it("says so when a park comment gives no reason", async () => {
+    const site = createSiteRepo({ testCommand: "true" });
+    const tracker = new FakeTracker();
+    const spec = tracker.addSpec("A greeting page");
+    const ticket = tracker.addTicket(spec, "Say hello");
+    await tracker.comment(ticket, "Parked.");
+
+    await runFactory(["loop", String(spec)], { cwd: site, agentCli: new FakeAgentCli(), tracker });
+
+    expect(tracker.issue(spec).comments.at(-1)).toContain(`- #${ticket} Say hello: its park comment gives no reason`);
   });
 
   it("still reports a run that stops early, with the reason and the Ticket it stopped on", async () => {
