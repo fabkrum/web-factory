@@ -44,3 +44,7 @@ the page, and must Pass the thumb test. `phone-menu-falls-through` looks the sam
 but its open menu has `pointer-events: none`, so taps land on the page behind.
 Every other fixture has no phone menu, and the thumb test reports it as not
 applicable.
+
+The `design-*` Site repositories in `../repos` carry a Design handoff in `design/`
+for the `code/design` Review check: `design-clean` stands, and each of the others
+carries one defect, named by its folder.

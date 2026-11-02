@@ -1,0 +1,23 @@
+{
+  "name": "create-web-factory",
+  "version": "0.0.0",
+  "description": "Creates a Site repository with the web-factory Factory inside: npm create web-factory@latest my-site",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "create-web-factory": "bin/create-web-factory.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "release.json",
+    "template"
+  ],
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build"
+  }
+}

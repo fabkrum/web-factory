@@ -1,0 +1,8 @@
+{
+  "title": "Tell Visitors when the bakery is open",
+  "body": "Visitors of the Corner Bakery's Site cannot see when the shop is open. The home page has to say it.\n\nThe Site does what it should when the home page shows the opening hours and the Site's tests cover them.",
+  "ticket": {
+    "title": "Show the opening hours on the home page",
+    "body": "Add a section with the heading \"Opening hours\" to `index.html`, below the existing paragraph, that says exactly: Open Monday to Friday, 7:00 to 18:00.\n\nAdd a test to `tests/home.mjs` that fails when the home page does not say this.\n\nChange nothing else. Add no dependency, script or image."
+  }
+}

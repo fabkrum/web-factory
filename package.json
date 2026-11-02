@@ -16,6 +16,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -25,6 +26,7 @@
     "vitest": "^4.1.12"
   },
   "dependencies": {
+    "@google/design.md": "0.4.0",
     "axe-core": "^4.14.0",
     "chrome-launcher": "^1.2.2",
     "lighthouse": "^13.5.0",

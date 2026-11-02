@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { DECISION_STAGES, isStageLabel, stageLabel, STAGES, type Stage } from "./stages.ts";
-import type { Issue, IssueEvent, PullRequest, Tracker } from "./tracker.ts";
+import { NotLoggedInError, type Issue, type IssueEvent, type OpenIssue, type PullRequest, type Tracker } from "./tracker.ts";
 
 /** Runs the GitHub CLI with these arguments and returns what it printed. */
 export type Gh = (args: string[], options: { cwd: string; input?: string }) => Promise<string>;
@@ -36,11 +36,15 @@ interface GitHubIssue {
   state: "open" | "closed";
   labels: (string | { name: string })[];
   pull_request?: unknown;
+  html_url?: string;
+  parent_issue_url?: string | null;
 }
 
 interface GitHubPullRequest {
   number: number;
   html_url: string;
+  body: string | null;
+  merged_at?: string | null;
 }
 
 interface GitHubTimelineEvent {
@@ -73,6 +77,16 @@ export class GitHubTracker implements Tracker {
     const created = (await this.#api("POST", "issues", { title, body, labels: [stageLabel(stage)] })) as GitHubIssue;
     if (parent !== undefined) await this.#api("POST", `issues/${parent}/sub_issues`, { sub_issue_id: created.id });
     return created.number;
+  }
+
+  async updateIssue(issue: number, { title, body }: { title: string; body: string }): Promise<void> {
+    await this.#api("PATCH", `issues/${issue}`, { title, body });
+  }
+
+  async removeTicket(spec: number, ticket: number): Promise<void> {
+    const { id, state } = await this.#issue(ticket);
+    if (state === "open") await this.#api("PATCH", `issues/${ticket}`, { state: "closed", state_reason: "not_planned" });
+    await this.#api("DELETE", `issues/${spec}/sub_issue`, { sub_issue_id: id });
   }
 
   async addBlocker(issue: number, blocker: number): Promise<void> {
@@ -121,6 +135,23 @@ export class GitHubTracker implements Tracker {
     return this.#toIssue(await this.#issue(issue));
   }
 
+  async openIssues(): Promise<OpenIssue[]> {
+    const issues = (await this.#list("issues?state=open")) as GitHubIssue[];
+    // GitHub lists pull requests as issues too; one list call, so the board stays cheap to reload.
+    return issues
+      .filter((issue) => issue.pull_request === undefined)
+      .map((issue) => {
+        const parent = /\/issues\/(\d+)$/.exec(issue.parent_issue_url ?? "")?.[1];
+        return {
+          number: issue.number,
+          title: issue.title,
+          labels: labelNames(issue),
+          url: issue.html_url ?? "",
+          ...(parent === undefined ? {} : { parent: Number(parent) }),
+        };
+      });
+  }
+
   async historyOf(issue: number): Promise<IssueEvent[]> {
     const timeline = (await this.#list(`issues/${issue}/timeline`)) as GitHubTimelineEvent[];
     const history: IssueEvent[] = [];
@@ -141,15 +172,27 @@ export class GitHubTracker implements Tracker {
   }
 
   async pullRequestFrom(head: string): Promise<PullRequest | undefined> {
-    const owner = (await this.#repository()).split("/")[0];
-    const query = new URLSearchParams({ state: "open", head: `${owner}:${head}` });
-    const [found] = (await this.#list(`pulls?${query}`)) as GitHubPullRequest[];
-    return found && { number: found.number, url: found.html_url };
+    const [found] = await this.#pullsFrom(head, "open");
+    return found && toPullRequest(found);
+  }
+
+  async mergedPullRequestFrom(head: string): Promise<PullRequest | undefined> {
+    const found = (await this.#pullsFrom(head, "closed")).find((pull) => pull.merged_at);
+    return found && toPullRequest(found);
   }
 
   async openPullRequest(pullRequest: { head: string; base: string; title: string; body: string }): Promise<PullRequest> {
-    const opened = (await this.#api("POST", "pulls", pullRequest)) as GitHubPullRequest;
-    return { number: opened.number, url: opened.html_url };
+    return toPullRequest((await this.#api("POST", "pulls", pullRequest)) as GitHubPullRequest);
+  }
+
+  async updatePullRequest(number: number, { body }: { body: string }): Promise<void> {
+    await this.#api("PATCH", `pulls/${number}`, { body });
+  }
+
+  async #pullsFrom(head: string, state: "open" | "closed"): Promise<GitHubPullRequest[]> {
+    const owner = (await this.#repository()).split("/")[0];
+    const query = new URLSearchParams({ state, head: `${owner}:${head}` });
+    return (await this.#list(`pulls?${query}`)) as GitHubPullRequest[];
   }
 
   async #toIssue(issue: GitHubIssue): Promise<Issue> {
@@ -171,15 +214,25 @@ export class GitHubTracker implements Tracker {
     return issue;
   }
 
+  async #run(args: string[], input?: string): Promise<string> {
+    try {
+      return await this.#gh(args, { cwd: this.#cwd, input });
+    } catch (error) {
+      // gh ends every complaint about a missing or expired login with this advice.
+      if (error instanceof Error && /gh auth login/.test(error.message)) throw new NotLoggedInError(error.message);
+      throw error;
+    }
+  }
+
   async #repository(): Promise<string> {
-    this.#repo ??= (await this.#gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], { cwd: this.#cwd })).trim();
+    this.#repo ??= (await this.#run(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"])).trim();
     return this.#repo;
   }
 
   async #api(method: string, path: string, body?: unknown): Promise<unknown> {
     const args = ["api", "-X", method, `repos/${await this.#repository()}/${path}`, ...API_HEADERS];
     if (body !== undefined) args.push("--input", "-");
-    const output = await this.#gh(args, { cwd: this.#cwd, input: body === undefined ? undefined : JSON.stringify(body) });
+    const output = await this.#run(args, body === undefined ? undefined : JSON.stringify(body));
     return output.trim() === "" ? undefined : JSON.parse(output);
   }
 
@@ -187,12 +240,16 @@ export class GitHubTracker implements Tracker {
   async #list(path: string): Promise<unknown[]> {
     const separator = path.includes("?") ? "&" : "?";
     const args = ["api", `repos/${await this.#repository()}/${path}${separator}per_page=100`, "--paginate", "--slurp", ...API_HEADERS];
-    const pages = JSON.parse(await this.#gh(args, { cwd: this.#cwd })) as unknown[][];
+    const pages = JSON.parse(await this.#run(args)) as unknown[][];
     return pages.flat();
   }
 }
 
 const API_HEADERS = ["-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28"];
+
+function toPullRequest(pull: GitHubPullRequest): PullRequest {
+  return { number: pull.number, url: pull.html_url, body: pull.body ?? "" };
+}
 
 function labelNames(issue: GitHubIssue): string[] {
   return issue.labels.map((label) => (typeof label === "string" ? label : label.name));

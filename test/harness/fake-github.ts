@@ -25,6 +25,7 @@ interface StoredPullRequest {
   title: string;
   body: string;
   state: "open" | "closed";
+  merged: boolean;
 }
 
 /** GitHub's own page size is 30 or more; a tiny one makes an adapter that forgets later pages fail. */
@@ -57,9 +58,22 @@ export class FakeGitHub {
 
   readonly gh: Gh = async (args, { input }) => this.#run(args, input);
 
+  /** While true, `gh` answers as it does before the Builder logs in. */
+  loggedOut = false;
+
   /** Pushes a branch to the fake remote, so a pull request can be opened from it. */
   pushBranch(name: string): void {
     this.#branches.add(name);
+  }
+
+  /** The Builder presses the merge button on GitHub. */
+  mergeByHand(number: number): void {
+    Object.assign(this.#pulls.get(number)!, { state: "closed", merged: true });
+  }
+
+  /** The Builder closes a pull request on GitHub without merging it. */
+  closePullRequestByHand(number: number): void {
+    this.#pulls.get(number)!.state = "closed";
   }
 
   /** The Builder reopens an issue on GitHub. */
@@ -82,6 +96,7 @@ export class FakeGitHub {
   }
 
   #run(args: string[], input: string | undefined): string {
+    if (this.loggedOut) throw new Error("To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.");
     if (args[0] === "repo" && args[1] === "view") return `${this.repo}\n`;
     if (args[0] !== "api") throw new Error(`fake gh does not know "gh ${args.join(" ")}"`);
 
@@ -144,6 +159,16 @@ export class FakeGitHub {
       return this.#issueJson(issue);
     }
 
+    if (route === "GET issues") {
+      const state = query.get("state") ?? "open";
+      // Like GitHub, the list holds pull requests too.
+      const issues = [...this.#issues.values()].filter((issue) => state === "all" || issue.state === state).map((issue) => this.#issueJson(issue));
+      const pulls = [...this.#pulls.values()]
+        .filter((pull) => state === "all" || pull.state === state)
+        .map((pull) => ({ id: this.#nextId++, number: pull.number, title: pull.title, body: pull.body, state: pull.state, labels: [], pull_request: {} }));
+      return [...issues, ...pulls];
+    }
+
     if ((match = route.match(/^GET issues\/(\d+)$/))) {
       const number = Number(match[1]);
       const pull = this.#pulls.get(number);
@@ -155,6 +180,8 @@ export class FakeGitHub {
       if (body.state === "closed" && issue.state === "open") issue.timeline.push({ event: "closed" });
       if (body.state === "open" && issue.state === "closed") issue.timeline.push({ event: "reopened" });
       if (body.state === "open" || body.state === "closed") issue.state = body.state;
+      if (typeof body.title === "string") issue.title = body.title;
+      if (typeof body.body === "string") issue.body = body.body;
       return this.#issueJson(issue);
     }
     if ((match = route.match(/^PUT issues\/(\d+)\/labels$/))) {
@@ -176,6 +203,13 @@ export class FakeGitHub {
       if (!parent.subIssues.includes(child.number)) parent.subIssues.push(child.number);
       parent.timeline.push({ event: "sub_issue_added" });
       return this.#issueJson(parent);
+    }
+    if ((match = route.match(/^DELETE issues\/(\d+)\/sub_issue$/))) {
+      const parent = this.#issue(Number(match[1]));
+      const child = this.#issueById(body.sub_issue_id);
+      if (!parent.subIssues.includes(child.number)) throw new HttpError(404, "Not Found");
+      parent.subIssues = parent.subIssues.filter((number) => number !== child.number);
+      return this.#issueJson(child);
     }
     if ((match = route.match(/^GET issues\/(\d+)\/sub_issues$/))) {
       return this.#issue(Number(match[1])).subIssues.map((number) => this.#issueJson(this.#issue(number)));
@@ -206,8 +240,15 @@ export class FakeGitHub {
       if ([...this.#pulls.values()].some((pull) => pull.head === head && pull.state === "open")) {
         throw new HttpError(422, "Validation Failed");
       }
-      const pull: StoredPullRequest = { number: this.#nextNumber++, head, base, title: String(body.title), body: String(body.body ?? ""), state: "open" };
+      const pull: StoredPullRequest = { number: this.#nextNumber++, head, base, title: String(body.title), body: String(body.body ?? ""), state: "open", merged: false };
       this.#pulls.set(pull.number, pull);
+      return this.#pullJson(pull);
+    }
+
+    if ((match = route.match(/^PATCH pulls\/(\d+)$/))) {
+      const pull = this.#pulls.get(Number(match[1]));
+      if (!pull) throw new HttpError(404, "Not Found");
+      pull.body = String(body.body);
       return this.#pullJson(pull);
     }
 
@@ -241,6 +282,7 @@ export class FakeGitHub {
   }
 
   #issueJson(issue: StoredIssue): Record<string, unknown> {
+    const parent = [...this.#issues.values()].find((candidate) => candidate.subIssues.includes(issue.number));
     return {
       id: issue.id,
       number: issue.number,
@@ -249,11 +291,12 @@ export class FakeGitHub {
       state: issue.state,
       labels: issue.labels.map((name) => ({ name })),
       html_url: `https://github.test/${this.repo}/issues/${issue.number}`,
+      parent_issue_url: parent ? `https://api.github.test/repos/${this.repo}/issues/${parent.number}` : null,
     };
   }
 
   #pullJson(pull: StoredPullRequest): Record<string, unknown> {
-    return { number: pull.number, html_url: `https://github.test/${this.repo}/pull/${pull.number}`, state: pull.state };
+    return { number: pull.number, html_url: `https://github.test/${this.repo}/pull/${pull.number}`, body: pull.body === "" ? null : pull.body, state: pull.state, merged_at: pull.merged ? "2026-11-02T10:00:00Z" : null };
   }
 }
 

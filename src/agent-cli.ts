@@ -6,6 +6,8 @@ export interface Session {
   /** Whether the Agent CLI's own sandbox is switched on; the Ticket loop always asks for it. */
   sandbox: boolean;
   timeoutMs: number;
+  /** The Stage this session works in; Build unless it is a Ticket's code review. */
+  stage?: "build" | "review";
 }
 
 export type SessionResult =
