@@ -22,8 +22,16 @@ export interface OpenIssue {
   parent?: number;
 }
 
-/** One thing that happened on an issue: a comment, a close or a reopen. */
-export type IssueEvent = { kind: "comment"; body: string } | { kind: "closed" } | { kind: "reopened" };
+/**
+ * One thing that happened on an issue: a comment, a close or a reopen. A comment is
+ * `trusted` when its author may write to the repository (on GitHub: its owner, a member or a
+ * collaborator). Anyone may comment on a public repository, so only a trusted comment may
+ * answer a park, park a Ticket or announce a Pass.
+ */
+export type IssueEvent =
+  | { kind: "comment"; body: string; author: string; trusted: boolean }
+  | { kind: "closed" }
+  | { kind: "reopened" };
 
 /** An open pull request, as the tracker's host (GitHub) shows it. */
 export interface PullRequest {

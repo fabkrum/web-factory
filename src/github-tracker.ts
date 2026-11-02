@@ -50,7 +50,13 @@ interface GitHubPullRequest {
 interface GitHubTimelineEvent {
   event?: string;
   body?: string | null;
+  actor?: { login?: string } | null;
+  user?: { login?: string } | null;
+  author_association?: string;
 }
+
+/** The author associations that come with write access to the repository. */
+const WRITE_ACCESS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 /** Decision stages are blue and Automatic stages green, as on the board. */
 const DECISION_COLOR = "0969da";
@@ -156,7 +162,14 @@ export class GitHubTracker implements Tracker {
     const timeline = (await this.#list(`issues/${issue}/timeline`)) as GitHubTimelineEvent[];
     const history: IssueEvent[] = [];
     for (const event of timeline) {
-      if (event.event === "commented") history.push({ kind: "comment", body: event.body ?? "" });
+      if (event.event === "commented") {
+        history.push({
+          kind: "comment",
+          body: event.body ?? "",
+          author: event.user?.login ?? event.actor?.login ?? "",
+          trusted: WRITE_ACCESS.has(event.author_association ?? ""),
+        });
+      }
       if (event.event === "closed") history.push({ kind: "closed" });
       if (event.event === "reopened") history.push({ kind: "reopened" });
     }

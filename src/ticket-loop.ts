@@ -286,7 +286,7 @@ async function buildTicket(ticket: Issue, options: InRun): Promise<Outcome> {
 
   // A Pass that broke off is finished from the tracker and git, never from a local record alone:
   // anything that happened on the Ticket since, or a new commit on its branch, is rework.
-  const history = await options.tracker.historyOf(ticket.number);
+  const history = heard(await options.tracker.historyOf(ticket.number), ticket.number, log);
   const tip = await refTarget(siteDir, `refs/heads/${branch}`);
   const announced = announcedPass(history);
   if (announced && announced === tip && (await gitSucceeds(siteDir, "merge-base", "--is-ancestor", announced, integration))) {
@@ -503,6 +503,20 @@ async function record(options: InRun, ticket: Issue, state: TicketState): Promis
 
 const PARKED = "Parked.";
 
+/**
+ * The history without comments by someone who may not write to the repository: on a public
+ * repository anyone may comment, and a comment the loop hears can park a Ticket or become the
+ * next session's instructions. With `log`, says how many it left out and whose.
+ */
+export function heard(history: IssueEvent[], ticket?: number, log?: (line: string) => void): IssueEvent[] {
+  const foreign = history.filter((event) => event.kind === "comment" && !event.trusted) as { author: string }[];
+  if (log && foreign.length > 0) {
+    const authors = [...new Set(foreign.map((event) => event.author || "unknown"))].join(", ");
+    log(`Ticket #${ticket}: ignored ${foreign.length} comment${foreign.length === 1 ? "" : "s"} by someone without write access (${authors})`);
+  }
+  return history.filter((event) => event.kind !== "comment" || event.trusted);
+}
+
 /** The attempt count at the end of a park comment, hidden from the page so another machine's board can read it. */
 const PARK_ATTEMPTS = /\s*<!-- factory attempts: (\d+) -->\s*$/;
 
@@ -511,7 +525,7 @@ const PARK_ATTEMPTS = /\s*<!-- factory attempts: (\d+) -->\s*$/;
  * missing when the comment carries no count, as one written by hand does.
  */
 export function stillParked(history: IssueEvent[]): { reason: string; attempts?: number } | undefined {
-  const last = history.at(-1);
+  const last = heard(history).at(-1);
   return last?.kind === "comment" && last.body.startsWith(PARKED) ? readPark(last.body) : undefined;
 }
 
@@ -526,7 +540,8 @@ function readPark(comment: string): { reason: string; attempts?: number } {
  * without the loop's own code review comments, which answer nothing. A Pass since the park
  * settled it, so there is none then. The board reads this; `stillParked` is the loop's gate.
  */
-export function lastPark(history: IssueEvent[]): { comment: string; reason: string; attempts?: number; since: IssueEvent[] } | undefined {
+export function lastPark(all: IssueEvent[]): { comment: string; reason: string; attempts?: number; since: IssueEvent[] } | undefined {
+  const history = heard(all);
   const at = history.findLastIndex((event) => event.kind === "comment" && event.body.startsWith(PARKED));
   if (at === -1) return undefined;
   const since = history.slice(at + 1).filter((event) => event.kind !== "comment" || !isCodeReviewComment(event.body));
@@ -558,12 +573,12 @@ const PASS_COMMENT = /^Pass\.[\s\S]*\(([0-9a-f]{40})\)\.$/;
 
 /** The commits the Ticket's Pass comments name, oldest first. */
 function passCommits(history: IssueEvent[]): string[] {
-  return history.flatMap((event) => (event.kind === "comment" ? (PASS_COMMENT.exec(event.body)?.[1] ?? []) : []));
+  return heard(history).flatMap((event) => (event.kind === "comment" ? (PASS_COMMENT.exec(event.body)?.[1] ?? []) : []));
 }
 
 /** The commit of a Pass that was announced and is the last thing that happened on the Ticket. */
 function announcedPass(history: IssueEvent[]): string | undefined {
-  const last = history.at(-1);
+  const last = heard(history).at(-1);
   return last?.kind === "comment" ? PASS_COMMENT.exec(last.body)?.[1] : undefined;
 }
 
