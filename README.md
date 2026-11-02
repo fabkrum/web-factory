@@ -107,6 +107,7 @@ The Factory package is `@fabkrum/web-factory`, with the command `factory`. It is
 - `npm run typecheck` checks the types.
 - `npm run build` compiles `src/` to `dist/`, which `bin/factory.js` runs.
 - `node scripts/check-personal.mjs` fails when a tracked file holds anything personal. CI runs it, builds the Codespace's dev container and runs the installer twice on clean macOS and Linux runners (`.github/workflows/factory.yml`).
+- Every night CI runs a fixed sample Spec through the Ticket loop on each supported Agent CLI and reports Pass, the parked reason or why it was skipped (`.github/workflows/nightly.yml`, `test/fixtures/sample-spec/`). It spends real money, so it never runs on a pull request; the workflow file names the secrets it needs.
 
 The Codespace's dev container is in the starter's `template/` folder, so every Site carries it. The template repository is the output of `npm create web-factory@latest web-factory-template`, pushed to GitHub with **Template repository** ticked in its settings. It moves to a new Factory like any other Site, through `factory update`.
 
