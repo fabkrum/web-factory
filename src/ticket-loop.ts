@@ -448,28 +448,42 @@ const PARK_ATTEMPTS = /\s*<!-- factory attempts: (\d+) -->\s*$/;
  */
 export function stillParked(history: IssueEvent[]): { reason: string; attempts?: number } | undefined {
   const last = history.at(-1);
-  if (last?.kind !== "comment" || !last.body.startsWith(PARKED)) return undefined;
-  const body = last.body.slice(PARKED.length);
+  return last?.kind === "comment" && last.body.startsWith(PARKED) ? readPark(last.body) : undefined;
+}
+
+function readPark(comment: string): { reason: string; attempts?: number } {
+  const body = comment.slice(PARKED.length);
   const count = PARK_ATTEMPTS.exec(body)?.[1];
   return { reason: body.replace(PARK_ATTEMPTS, "").trim(), ...(count === undefined ? {} : { attempts: Number(count) }) };
 }
 
-/** What the session needs to know when the Builder answered a park: the park comment and everything said since. */
-function answeredPark(history: IssueEvent[]): string | undefined {
+/**
+ * The last park on the Ticket, also when something happened after it: `since` is what did,
+ * without the loop's own code review comments, which answer nothing. A Pass since the park
+ * settled it, so there is none then. The board reads this; `stillParked` is the loop's gate.
+ */
+export function lastPark(history: IssueEvent[]): { comment: string; reason: string; attempts?: number; since: IssueEvent[] } | undefined {
   const at = history.findLastIndex((event) => event.kind === "comment" && event.body.startsWith(PARKED));
   if (at === -1) return undefined;
-  const since = history.slice(at + 1).flatMap((event) => (event.kind === "comment" && !isCodeReviewComment(event.body) ? [event.body] : []));
-  // A Pass since the park settled it; what came after is not an answer to it.
-  if (since.length === 0 || since.some((body) => PASS_COMMENT.test(body))) return undefined;
-  const parked = history[at] as { body: string };
+  const since = history.slice(at + 1).filter((event) => event.kind !== "comment" || !isCodeReviewComment(event.body));
+  if (since.some((event) => event.kind === "comment" && PASS_COMMENT.test(event.body))) return undefined;
+  const comment = (history[at] as { body: string }).body;
+  return { comment, ...readPark(comment), since };
+}
+
+/** What the session needs to know when the Builder answered a park: the park comment and everything said since. */
+function answeredPark(history: IssueEvent[]): string | undefined {
+  const park = lastPark(history);
+  const said = park?.since.flatMap((event) => (event.kind === "comment" ? [event.body] : [])) ?? [];
+  if (!park || said.length === 0) return undefined;
   return [
     "This Ticket was parked last time, with this on the Ticket:",
     "",
-    parked.body,
+    park.comment,
     "",
     "The Builder answered since. Build exactly what the answer says:",
     "",
-    ...since,
+    ...said,
   ].join("\n");
 }
 

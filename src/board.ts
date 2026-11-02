@@ -5,7 +5,7 @@ import { renderBoard } from "./board-page.ts";
 import type { Clock } from "./clock.ts";
 import { LOCAL_DIR, readAllLoopStates, type TicketState } from "./loop-state.ts";
 import { DECISION_STAGES, isStageLabel, STAGES, type Stage } from "./stages.ts";
-import { stillParked } from "./ticket-loop.ts";
+import { lastPark } from "./ticket-loop.ts";
 import type { OpenIssue, Tracker } from "./tracker.ts";
 
 export interface Card {
@@ -91,17 +91,21 @@ type KnownState = Omit<TicketState, "attempts"> & { attempts?: number };
 
 /**
  * The tracker holds the park comment, so a Ticket parked on another machine, whose local
- * state is not here, still shows as parked with its reason and attempt count.
+ * state is not here, still shows as parked with its reason and attempt count, also once
+ * the Builder answered it.
  */
 async function withParkFromTracker(issue: OpenIssue, recorded: TicketState | undefined, tracker: Tracker): Promise<KnownState | undefined> {
   if (recorded) return recorded;
-  const parked = stillParked(await tracker.historyOf(issue.number));
-  return parked && { status: "parked", ...parked };
+  const parked = lastPark(await tracker.historyOf(issue.number));
+  if (!parked) return undefined;
+  return { status: "parked", reason: parked.reason, ...(parked.attempts === undefined ? {} : { attempts: parked.attempts }) };
 }
 
 /** Whether something happened on a parked Ticket since its park comment; the tracker decides that, not the local state. */
 async function answered(issue: OpenIssue, state: KnownState, tracker: Tracker): Promise<boolean> {
-  return state.status === "parked" && stillParked(await tracker.historyOf(issue.number)) === undefined;
+  if (state.status !== "parked") return false;
+  const parked = lastPark(await tracker.historyOf(issue.number));
+  return parked === undefined || parked.since.length > 0;
 }
 
 function loopCommand(spec: number | undefined): string {

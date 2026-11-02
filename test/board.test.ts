@@ -163,6 +163,50 @@ describe("the board's data", () => {
     expect(card.nextAction).toMatch(/^Answer in a comment/);
   });
 
+  describe("a Ticket parked on another machine, after its park comment", () => {
+    const parkedElsewhere = async () => {
+      const tracker = new FakeTracker();
+      const spec = tracker.addSpec("A greeting page");
+      const ticket = tracker.addTicket(spec, "Say hello");
+      await tracker.comment(ticket, "Parked. Blue or green?\n\n<!-- factory attempts: 3 -->");
+      return { tracker, spec, ticket };
+    };
+
+    it("stays parked with its count and says the Builder answered", async () => {
+      const { tracker, spec, ticket } = await parkedElsewhere();
+      await tracker.comment(ticket, "Use blue.");
+
+      expect(cardIn(await boardOf(emptySite(), tracker), "build", ticket)).toMatchObject({
+        status: "parked",
+        attempts: 3,
+        reason: "Blue or green?",
+        nextAction: `You answered on the Ticket, so run the Ticket loop again: factory loop ${spec}`,
+      });
+    });
+
+    it("still waits for the Builder when only a code review commented", async () => {
+      const { tracker, spec, ticket } = await parkedElsewhere();
+      await tracker.comment(ticket, "Code review of abc1234: changes needed.\n\n1. Fix it.");
+
+      expect(cardIn(await boardOf(emptySite(), tracker), "build", ticket)).toMatchObject({
+        status: "parked",
+        attempts: 3,
+        nextAction: `Answer in a comment on Ticket #${ticket}, then run: factory loop ${spec}`,
+      });
+    });
+
+    it("is no longer parked once a Pass settled it", async () => {
+      const { tracker, spec, ticket } = await parkedElsewhere();
+      await tracker.comment(ticket, "Use blue.");
+      await tracker.comment(ticket, `Pass. The Ticket loop built this Ticket on \`x\`, its gate was green, and \`y\` now contains it (${"a".repeat(40)}).`);
+
+      const card = cardIn(await boardOf(emptySite(), tracker), "build", ticket);
+
+      expect(card.status).toBeUndefined();
+      expect(card.nextAction).toBe(`Start the Ticket loop: factory loop ${spec}`);
+    });
+  });
+
   it("shows a Ticket waiting on a rate limit as waiting, with its resume time", async () => {
     const site = createSiteRepo({ testCommand: "true" });
     const tracker = new FakeTracker();
