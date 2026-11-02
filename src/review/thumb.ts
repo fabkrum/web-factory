@@ -8,7 +8,7 @@ const PHONE = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch:
 /** What can open a menu: real controls, and the bare elements a hamburger icon is often built from. */
 const TOGGLES = `button, summary, label[for], [role="button"], [aria-expanded], [aria-controls], [popovertarget], [class~="hamburger" i], [class~="burger" i], [class*="menu-toggle" i], [class*="nav-toggle" i]`;
 
-/** How long an opening menu gets to show all its links, and how long they must stay the same to count as open. */
+/** How long an opening menu gets to show all its links, however long it animates up to TAP_TIMEOUT, and how long they must stay the same to count as open. */
 const OPEN_TIMEOUT = 1_000;
 const OPEN_QUIET = 300;
 
@@ -132,13 +132,14 @@ async function tapToggle(page: Page, toggle: Control, place: number): Promise<Me
     const started = Date.now();
     let items: Control[] = [];
     let changed = started;
-    while (Date.now() - started < OPEN_TIMEOUT) {
+    while (Date.now() - started < TAP_TIMEOUT) {
       await page.waitForTimeout(MEASURE_EVERY);
       if (page.url() !== address) return undefined;
-      const { links } = await scan(page, closed);
+      const { links, moving } = await scan(page, closed);
       if (links.length !== items.length) changed = Date.now();
       items = links;
-      if (items.length > 0 && Date.now() - changed >= OPEN_QUIET) break;
+      if (items.length > 0 && !moving && Date.now() - changed >= OPEN_QUIET) break;
+      if (!moving && Date.now() - started >= OPEN_TIMEOUT) break;
     }
     return { place, closed, items };
   } catch (error) {
@@ -196,26 +197,39 @@ function nameOf(target: Control): Promise<string> {
   return target.evaluate((element) => (element.textContent?.trim() || element.getAttribute("aria-label") || element.getAttribute("href") || element.tagName.toLowerCase()).slice(0, 60));
 }
 
-/** Where to touch the target once it stopped moving, after scrolling it into view. */
-async function holdStill(page: Page, target: Control): Promise<{ x: number; y: number; onScreen: boolean }> {
+/** Where to touch the target once it holds its place and nothing animates it any more, after scrolling it into view. */
+async function holdStill(page: Page, target: Control): Promise<Spot> {
   let last = await spot(target);
   for (let measure = 0; measure < MEASURES; measure++) {
     await page.waitForTimeout(MEASURE_EVERY);
     const now = await spot(target);
-    if (now.x === last.x && now.y === last.y) return now;
+    if (now.x === last.x && now.y === last.y && !now.moving) return now;
     last = now;
   }
   return last;
 }
 
-function spot(target: Control): Promise<{ x: number; y: number; onScreen: boolean }> {
+function spot(target: Control): Promise<Spot> {
   return target.evaluate((element) => {
     element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
     const box = element.getClientRects()[0] ?? element.getBoundingClientRect();
     const x = box.left + box.width / 2;
     const y = box.top + box.height / 2;
-    return { x, y, onScreen: x >= 0 && x < window.innerWidth && y >= 0 && y < window.innerHeight };
+    // An animation that never ends is decoration: waiting for it would only use up the time.
+    const moving = document.getAnimations().some((animation) => {
+      const effect = animation.effect as KeyframeEffect | null;
+      return animation.playState === "running" && effect?.target?.contains(element) === true && effect.getTiming().iterations !== Infinity;
+    });
+    return { x, y, onScreen: x >= 0 && x < window.innerWidth && y >= 0 && y < window.innerHeight, moving };
   });
+}
+
+interface Spot {
+  x: number;
+  y: number;
+  onScreen: boolean;
+  /** An animation on the target or around it is still running, so what shows there can still change. */
+  moving: boolean;
 }
 
 /** An element of the page itself, held directly: a position among the page's elements shifts when a menu is inserted. */
@@ -228,46 +242,54 @@ interface Scan {
   /** The links a Visitor can see or scroll to now; with `before`, only those more in sight than they were then. */
   links: Control[];
   sights: Sights;
+  /** An animation with an end is running on the page, so more links may be on their way. */
+  moving: boolean;
   /** The toggles a Visitor can see: named as a menu first, then in the order of the page. */
   toggles: Control[];
 }
 
 /**
- * Reads the page as a Visitor sees it. A link slid off to the side, folded to no
- * height or cut away is not there yet (0). One pinned below the screen is there
- * but cannot be reached (1): that is a closed bottom sheet when the menu is shut,
- * and an item a Visitor cannot get to when the menu is open, so what counts as
- * opened is what came further into sight. The rest is on the screen or scrolled to (2).
+ * Reads the page as a Visitor sees it, asking the browser what lies at each link
+ * rather than reading the CSS that put it there. The links that came further into
+ * sight are what a tap opened.
+ *
+ * 0: not there. Hidden, off to the side or above the screen, cut away by an
+ * ancestor, or clipped so that nothing of it lies at its own spot.
+ * 1: there, but no tap reaches it now. Below the screen, which is a closed bottom
+ * sheet or the rest of the page, or lying under something else.
+ * 2: on top at its own spot.
+ *
+ * The hit test ignores `pointer-events`, and an open menu under a see-through layer
+ * still comes up from 0 to 1, so a menu that lets taps fall through counts as opened:
+ * that is the defect this check is for, and tapping it is what finds it. A link past
+ * the fold of a scrolling list is as far in sight as the list, which shows it on a
+ * scroll, so it is tapped like the rest.
  */
 async function scan(page: Page, before?: Sights): Promise<Scan> {
   const found = await page.evaluateHandle(
     ({ selector, before }) => {
-      const clips = (style: CSSStyleDeclaration) => style.overflowX !== "visible" || style.overflowY !== "visible";
-      const length = (value: string, whole: number) => (value.endsWith("%") ? (parseFloat(value) / 100) * whole : parseFloat(value));
-      const cutAway = (path: string, box: DOMRect) => {
-        const [, shape, shapeArguments = ""] = /^(\w+)\((.*)\)/.exec(path) ?? [];
-        if (shape === "circle" || shape === "ellipse") return /^0(px|%)?(\s|$)/.test(shapeArguments);
-        if (shape === "polygon") {
-          const points = shapeArguments.split(",").map((point) => point.trim().split(/\s+/));
-          return new Set(points.map(([x]) => x)).size === 1 || new Set(points.map(([, y]) => y)).size === 1;
-        }
-        if (shape !== "inset") return false;
-        const [top = "0", right = top, bottom = top, left = right] = (shapeArguments.split(" round ")[0] ?? "").trim().split(/\s+/);
-        return length(top, box.height) + length(bottom, box.height) >= box.height || length(left, box.width) + length(right, box.width) >= box.width;
-      };
-      const sight = (element: Element) => {
+      const hides = (overflow: string) => overflow === "hidden" || overflow === "clip";
+      const scrolls = (overflow: string) => overflow === "auto" || overflow === "scroll";
+      const sight = (element: Element): number => {
         if (!element.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return 0;
-        const box = element.getBoundingClientRect();
+        const box = element.getClientRects()[0] ?? element.getBoundingClientRect();
         if (box.width === 0 || box.height === 0 || box.right <= 0 || box.left >= window.innerWidth || box.bottom <= 0) return 0;
-        let pinned = false;
-        for (let parent: Element | null = element; parent && parent !== document.body; parent = parent.parentElement) {
-          const style = getComputedStyle(parent);
+        let [left, right, top, bottom] = [box.left, box.right, box.top, box.bottom];
+        for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+          const { overflowX, overflowY } = getComputedStyle(parent);
+          if (overflowX === "visible" && overflowY === "visible") continue;
           const clip = parent.getBoundingClientRect();
-          if (cutAway(style.clipPath, clip)) return 0;
-          if (parent !== element && clips(style) && (box.right <= clip.left || box.left >= clip.right || box.bottom <= clip.top || box.top >= clip.bottom)) return 0;
-          pinned ||= style.position === "fixed";
+          [left, right, top, bottom] = [Math.max(left, clip.left), Math.min(right, clip.right), Math.max(top, clip.top), Math.min(bottom, clip.bottom)];
+          if (left < right && top < bottom) continue;
+          if (scrolls(overflowX) || scrolls(overflowY)) return sight(parent);
+          if (hides(overflowX) || hides(overflowY)) return 0;
         }
-        return pinned && box.top >= window.innerHeight ? 1 : 2;
+        if (top >= window.innerHeight) return 1;
+        const x = (Math.max(left, 0) + Math.min(right, window.innerWidth)) / 2;
+        const y = (Math.max(top, 0) + Math.min(bottom, window.innerHeight)) / 2;
+        const stack = document.elementsFromPoint(x, y);
+        if (!stack.some((hit) => element.contains(hit))) return 0;
+        return stack[0] && element.contains(stack[0]) ? 2 : 1;
       };
       // Whether a control calls itself a menu, in the languages a Builder is likely to write in.
       const menuWord = /men[uüú](?!\p{L})|(?<!\p{L})nav(?:igation|egaci[oó]n)?(?!\p{L})/iu;
@@ -276,9 +298,16 @@ async function scan(page: Page, before?: Sights): Promise<Scan> {
         [element.textContent, element.getAttribute("aria-label"), element.getAttribute("title")].some((label) => menuWord.test(label?.trim() ?? "")) ||
         [element.id, ...element.classList, ...(element.getAttribute("aria-controls") ?? "").split(/\s+/)].some((code) => menuCode.test(code));
       const onBar = (element: Element) => element.closest('header, nav, [role="banner"], [role="navigation"]') !== null;
+      const anyPointer = new CSSStyleSheet();
+      anyPointer.replaceSync("* { pointer-events: auto !important; }");
+      const sheets = [...document.adoptedStyleSheets];
+      document.adoptedStyleSheets = [...sheets, anyPointer];
       const toggles = [...document.querySelectorAll(selector)].filter((element) => sight(element) === 2);
       const sights = new Map([...document.querySelectorAll("a[href]")].map((link) => [link, sight(link)]));
+      document.adoptedStyleSheets = sheets;
+      const moving = document.getAnimations().some((animation) => animation.playState === "running" && animation.effect?.getTiming().iterations !== Infinity);
       return {
+        moving,
         links: [...sights].flatMap(([link, now]) => (now > (before?.get(link) ?? 0) ? [link] : [])),
         sights,
         toggles: [...toggles.filter(named), ...toggles.filter((element) => !named(element) && onBar(element))],
@@ -289,6 +318,7 @@ async function scan(page: Page, before?: Sights): Promise<Scan> {
   return {
     links: await elementsOf(await found.getProperty("links")),
     sights: await found.getProperty("sights"),
+    moving: await found.evaluate((read) => read.moving),
     toggles: await elementsOf(await found.getProperty("toggles")),
   };
 }

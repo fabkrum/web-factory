@@ -251,6 +251,64 @@ document.querySelector("button").addEventListener("click", () => {
     expect(thumb.failures).toEqual([]);
   });
 
+  it.each([
+    ["below the page", "position: absolute; left: 0; right: 0; bottom: 0; transform: translateY(100%);", "transform: none; z-index: 5;"],
+    ["behind an opaque header", "position: fixed; left: 0; right: 0; top: 3rem; z-index: 1; transform: translateY(-100%);", "transform: none;"],
+    ["under the page", "position: fixed; left: 0; right: 0; top: 3rem; z-index: -1;", "z-index: 5;"],
+    ["clipped by a calculated inset", "position: fixed; left: 0; right: 0; top: 3rem; clip-path: inset(0 0 calc(100% + 1px) 0);", "clip-path: none; z-index: 5;"],
+    ["clipped to a flat ellipse", "position: fixed; left: 0; right: 0; top: 3rem; clip-path: ellipse(50% 0 at 50% 0);", "clip-path: none; z-index: 5;"],
+    ["clipped by an evenodd polygon", "position: fixed; left: 0; right: 0; top: 3rem; clip-path: polygon(evenodd, 0 0, 100% 0, 100% 0, 0 0);", "clip-path: none; z-index: 5;"],
+  ])("Passes a menu closed %s and finds its fall-through", async (_, closed, open) => {
+    const page = (extra: string) =>
+      phonePage(
+        `header { position: fixed; top: 0; left: 0; right: 0; height: 3rem; background: #fff; z-index: 3; } main { padding-top: 3rem; background: #fff; position: relative; } #panel { background: #fff; ${closed} } #panel.open { ${open} ${extra} } #panel a { display: block; padding: 1rem; }`,
+        `<header><button type="button">Menu</button></header><nav id="panel">${PANEL_LINKS}</nav>${TOGGLE_SCRIPT}`,
+      );
+
+    const working = (await reviewPages({ "/": page(""), ...ROUTES })).thumb;
+    await site?.close();
+    site = undefined;
+    const fallsThrough = (await reviewPages({ "/": page("pointer-events: none;"), ...ROUTES })).thumb;
+
+    expect(working.notApplicable).toBeUndefined();
+    expect(working.failures).toEqual([]);
+    expect(fallsThrough.failures.map((failure) => failure.location)).toEqual(['/ at "One"', '/ at "Two"']);
+  });
+
+  /** A closed 200px drawer of twenty links, the last with `last` for its style. */
+  function drawerPage(closed: string, open: string, last: string): string {
+    const links = Array.from({ length: 20 }, (_, index) => `<a href="/${index}"${index === 19 ? ` style="${last}"` : ""}>Item${index}</a>`).join("");
+    return phonePage(
+      `#panel { position: fixed; top: 3rem; left: 0; right: 0; height: 200px; overflow-y: auto; background: #fff; z-index: 5; ${closed} } #panel.open { ${open} } #panel a { display: block; padding: 1rem; }`,
+      `<button type="button">Menu</button><nav id="panel">${links}</nav>${TOGGLE_SCRIPT}`,
+    );
+  }
+
+  it.each([
+    ["with display", "display: none;", "display: block;"],
+    ["off the bottom of the screen", "top: auto; bottom: 0; transform: translateY(100%);", "transform: none;"],
+  ])("taps the items past the fold of a scrolling menu closed %s", async (_, closed, open) => {
+    const { thumb } = await reviewPages({ "/": drawerPage(closed, open, "pointer-events: none"), ...ROUTES });
+
+    expect(thumb.notApplicable).toBeUndefined();
+    expect(thumb.failures.map((failure) => failure.location)).toEqual(['/ at "Item19"']);
+  });
+
+  it.each([
+    ["a circle over 1 s", "circle(0 at 0 0)", "circle(150% at 0 0)", "1s"],
+    ["a circle over 0.6 s", "circle(0 at 0 0)", "circle(150% at 0 0)", "0.6s"],
+    ["an inset over 1 s", "inset(0 0 100% 0)", "inset(0)", "1s"],
+  ])("waits for a menu revealed with %s", async (_, closed, open, time) => {
+    const page = phonePage(
+      `#panel { position: fixed; top: 3rem; left: 0; right: 0; background: #fff; z-index: 5; clip-path: ${closed}; transition: clip-path ${time}; } #panel.open { clip-path: ${open}; } #panel a { display: block; padding: 1rem; }`,
+      `<button type="button">Menu</button><nav id="panel">${PANEL_LINKS}</nav>${TOGGLE_SCRIPT}`,
+    );
+    const { thumb } = await reviewPages({ "/": page, ...ROUTES });
+
+    expect(thumb.notApplicable).toBeUndefined();
+    expect(thumb.failures).toEqual([]);
+  });
+
   it("does not take a closed bottom sheet for what another button opened", async () => {
     const page = phonePage(
       `#panel { position: fixed; left: 0; right: 0; bottom: 0; transform: translateY(100%); }`,
