@@ -4,6 +4,7 @@
   "reviewChecks": [
     "performance/lighthouse",
     "accessibility/axe",
+    "accessibility/thumb-test",
     "visibility/sitemap",
     "visibility/canonical",
     "visibility/one-url",
