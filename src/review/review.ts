@@ -1,5 +1,6 @@
 import { axeCheck } from "./axe.ts";
 import { launchBrowser } from "./browser.ts";
+import { designCheck } from "./design.ts";
 import { REVIEW_AREAS, type Failure, type ReviewArea, type ReviewCheck } from "./check.ts";
 import { lighthouseCheck } from "./lighthouse.ts";
 import { oneUrlCheck } from "./one-url.ts";
@@ -22,6 +23,7 @@ export const REVIEW_CHECKS: ReviewCheck[] = [
   consoleCheck,
   advisoriesCheck,
   siteTestsCheck,
+  designCheck,
 ];
 
 /** Why a check that reads the Site's repository did not run, when the review runs outside one. */

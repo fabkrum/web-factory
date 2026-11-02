@@ -82,7 +82,7 @@ export async function runTicketLoop(options: LoopOptions): Promise<LoopResult> {
     .sort((a, b) => a.number - b.number);
   const result: LoopResult = { passed: [], parked: [], notPassed: [], blocked: [] };
   if (tickets.length === 0 && !specDone(all)) {
-    log(`Spec #${spec} has no open Tickets in the Build Stage, so there is nothing to build.`);
+    log(`Spec #${spec} has no open Tickets in the Build Stage, so there is nothing to build. Tickets reach it once the Builder approves the Design.`);
     return result;
   }
 

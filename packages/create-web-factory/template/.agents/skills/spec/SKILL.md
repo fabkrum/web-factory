@@ -94,4 +94,4 @@ Only after the Builder confirms, run:
 npx factory spec confirm <number>
 ```
 
-The Spec moves on to the Design Stage. Its Tickets stay in the Spec Stage and reach the Build Stage, and with it the Ticket loop, only once the Builder approves the Design. Tell them that, and that their next step is Design.
+The Spec moves on to the Design Stage. Its Tickets stay in the Spec Stage and reach the Build Stage, and with it the Ticket loop, only once the Builder approves the Design. Tell them that, and that their next step is the `design` skill.

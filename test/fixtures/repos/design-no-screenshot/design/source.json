@@ -1,0 +1,10 @@
+{
+  "tool": "none",
+  "how": "Fixture.",
+  "spec": 1,
+  "designFormat": "alpha",
+  "date": "2026-11-02",
+  "routes": [
+    "/"
+  ]
+}

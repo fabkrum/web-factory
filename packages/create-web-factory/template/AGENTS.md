@@ -20,7 +20,11 @@ Every terminal step you ask of the Builder is exactly one command.
 
 Every Request travels eight Stages: Request, Spec, Design, Build, Review, Approve, Publish, Measure. The Builder decides at Request, Spec, Design and Approve. The rest runs by itself.
 
-When the Builder brings an idea or a bug, follow the `request` skill in `.agents/skills/request`. To work a Request out, follow the `spec` skill in `.agents/skills/spec`.
+When the Builder brings an idea or a bug, follow the `request` skill in `.agents/skills/request`. To work a Request out, follow the `spec` skill in `.agents/skills/spec`. When a Spec waits in the Design Stage, follow the `design` skill in `.agents/skills/design`.
+
+## The Design handoff
+
+The `design/` folder is the only design input for building: `DESIGN.md` is the source of colors, type and rules, `tokens.json` is generated from it, and `screenshots/` shows what the Builder approved per route. Build what they say, in the Site's own stack. Never copy `design/sample` or any tool's code into the Site: it is reference only. Never edit `tokens.json` by hand.
 
 ## Required reading: Modern Web Guidance
 

@@ -3,8 +3,10 @@ import { systemClock, type Clock } from "./clock.ts";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { CONFIG_FILE, ConfigError, readSiteConfig } from "./config.ts";
+import { ReviewError } from "./review/check.ts";
 import { couldNotRun, formatReport } from "./review/report.ts";
 import { REVIEW_CHECKS, runReview } from "./review/review.ts";
+import { approveDesign, runDesign } from "./design.ts";
 import { KickoffError, runKickoff } from "./kickoff.ts";
 import { PipelineError, runRequest } from "./request.ts";
 import { confirmCut, runSpec } from "./spec.ts";
@@ -39,6 +41,11 @@ export const USAGE = `Usage:
                                   in the Spec Stage; the spec skill writes the file. Run again
                                   with a changed file to replace the cut
   factory spec confirm <spec>     The Builder confirmed the cut: the Spec moves on to Design
+  factory design <spec>           Make the Design handoff in design/ from the DESIGN.md and
+                                  sample page the design skill wrote: generated tokens, a
+                                  reference screenshot per route and a provenance record.
+                                  Run again after any change
+  factory design approve <spec>   The Builder approved the Design: its Tickets move to Build
   factory loop <spec>             Build the open Tickets of Spec number <spec>, unattended
   factory review <url> [--json] [--check <id>]
                                   Run every Review check on the Site served at <url>,
@@ -77,6 +84,7 @@ export async function factory(argv: string[], deps: FactoryDeps): Promise<number
   if (command === "kickoff") return kickoff(args, deps);
   if (command === "request") return request(args, deps);
   if (command === "spec") return spec(args, deps);
+  if (command === "design") return design(args, deps);
   if (command !== "loop") {
     deps.stderr(`factory does not know the command "${command}".\n\n${USAGE}`);
     return 2;
@@ -121,6 +129,17 @@ async function spec(args: string[], deps: FactoryDeps): Promise<number> {
   return onTracker(deps, (tracker) => runSpec({ siteDir: deps.cwd, file, tracker, stdout: deps.stdout }));
 }
 
+async function design(args: string[], deps: FactoryDeps): Promise<number> {
+  const approving = args[0] === "approve";
+  const number = issueNumber(args[approving ? 1 : 0]);
+  if (args.length !== (approving ? 2 : 1) || number === undefined) {
+    deps.stderr(`factory design needs the number of the Spec, for example: factory design 12\n\n${USAGE}`);
+    return 2;
+  }
+  if (approving) return onTracker(deps, (tracker) => approveDesign({ siteDir: deps.cwd, spec: number, tracker, stdout: deps.stdout }));
+  return onTracker(deps, (tracker) => runDesign({ siteDir: deps.cwd, spec: number, tracker, clock: deps.clock ?? systemClock, stdout: deps.stdout }));
+}
+
 /** A step that writes to GitHub: what stops it is printed for the Builder, and running it again finishes it. */
 async function onTracker(deps: FactoryDeps, step: (tracker: Tracker) => Promise<void>): Promise<number> {
   if (!deps.tracker) {
@@ -135,7 +154,7 @@ async function onTracker(deps: FactoryDeps, step: (tracker: Tracker) => Promise<
       deps.stderr(`${LOGIN_NEEDED}\n`);
       return 1;
     }
-    if (error instanceof PipelineError || error instanceof ConfigError) {
+    if (error instanceof PipelineError || error instanceof ConfigError || error instanceof ReviewError) {
       deps.stderr(`${error.message}\n`);
       return 1;
     }

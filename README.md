@@ -26,6 +26,16 @@ The `spec` skill questions the Builder until the Request is precise, agrees how 
 
 Once the Builder confirms, `factory spec confirm <spec>` moves the Spec to the Design Stage. Its Tickets stay in the Spec Stage until the Design is approved; the Ticket loop builds only Tickets in the Build Stage.
 
+## Design
+
+Every design ends as the Design handoff, the committed folder `design/`: `DESIGN.md` (the source of the design), `tokens.json` (DTCG tokens generated from it), `screenshots/` (a reference screenshot per route), `sample/` (reference only, never copied into the Site) and `source.json` (the provenance record: tool, how it was made, Spec, format version, date, routes).
+
+Without a design tool, the `design` skill writes `design/DESIGN.md` and a sample page from the Spec, and `factory design <spec>` makes the rest and commits it. It refuses a DESIGN.md that fails its lint or its contrast check, or that does not name the pinned format version, and changes nothing then. The contrast check counts a warning from the linter as a failure and needs at least one component with both a background and a text color, since it could otherwise measure nothing. Import skills for Stitch, Figma and Claude Design are not here yet.
+
+The skill shows the Builder the result and explains what approving means. `factory design approve <spec>` is the only way a Spec's Tickets reach the Build Stage; it refuses a handoff that does not stand, was made for another Spec, or has uncommitted changes. Asking for changes means changing the files and running `factory design <spec>` again, and the Spec stays in the Design Stage. The handoff lives on the base branch, because every Ticket starts from there.
+
+The Review check `code/design` runs on every Ticket: DESIGN.md's lint and contrast, `tokens.json` still matching what DESIGN.md generates, and a screenshot for every route in `source.json`. It is reported as not run on a Site that never had a handoff. The DESIGN.md format version is pinned in `src/design-handoff.ts`, and the `@google/design.md` package at one exact version in `package.json`; `factory update` will move them on purpose.
+
 ## Development
 
 The Factory package is `@fabkrum/web-factory`, with the command `factory`. It is written in TypeScript for Node 22.19 or later.
