@@ -266,18 +266,20 @@ describe("factory kickoff", () => {
     expect(git(site, "rev-parse", "HEAD")).toBe(commit);
   });
 
-  it("counts Firebase App Hosting as another host: it has no preview channels", async () => {
+  it.each(["Firebase App Hosting", "firebase-app-hosting", "App Hosting"])("refuses %s, with its own setup too: v1 needs a Preview per Ticket and it has none", async (chosen) => {
     const site = newSite();
-    const appHosting = { name: "Firebase App Hosting", for: "Runs a server", against: "No preview channels" };
-    const host = { ...decisions().host, chosen: "Firebase App Hosting", options: [...decisions().host.options, appHosting] };
+    const option = { name: chosen, for: "Runs a server", against: "No preview channels" };
+    const host = { ...decisions().host, chosen, options: [...decisions().host.options, option], setup: "Connect it in the console." };
 
     const run = await kickoff(site, decisions({ host }));
 
     expect(run.exitCode).toBe(1);
-    expect(run.stderr).toMatch(/setup/);
+    expect(run.stderr).toMatch(/Preview/);
+    expect(run.stderr).toMatch(/static/);
+    expect(existsSync(join(site, "docs/adr"))).toBe(false);
   });
 
-  it.each(["firebase-app-hosting", "Firebase Functions", "Netlify (not Firebase)"])("asks %s for its own setup: only Firebase Hosting has an adapter", async (chosen) => {
+  it.each(["Firebase Functions", "Netlify (not Firebase)"])("asks %s for its own setup: only Firebase Hosting has an adapter", async (chosen) => {
     const site = newSite();
     const option = { name: chosen, for: "Fits", against: "No adapter" };
     const host = { ...decisions().host, chosen, options: [...decisions().host.options, option] };

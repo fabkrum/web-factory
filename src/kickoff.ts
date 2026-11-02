@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AGENT_CLIS, CONFIG_FILE, ConfigError, type AgentCliName } from "./config.ts";
 import { AGENTS_FILE, commitRecord, fieldReader, findStackSection, hasSectionHeading, kickoffRecorded, readSkillFile, renderAdr, withStackSection, writeAdr, type Choice } from "./decision-record.ts";
-import { isFirebaseHosting } from "./host.ts";
+import { isFirebaseAppHosting, isFirebaseHosting } from "./host.ts";
 import type { Tracker } from "./tracker.ts";
 
 /** What the Builder decided at Kickoff; the kickoff skill writes it down after their conversation. */
@@ -50,6 +50,7 @@ export function parseDecisions(raw: unknown): KickoffDecisions {
   const commands = record(decisions.commands, "commands");
   const host = choice(decisions.host, "host");
   const setup = record(decisions.host, "host").setup;
+  if (isFirebaseAppHosting(host.chosen)) throw new KickoffError(`The Kickoff decisions choose ${host.chosen}, which this version does not offer: it has no preview channels, and the Ticket loop needs a Preview for the Builder to read. Sites are static, on Firebase Hosting; a Site that needs a server has to wait for a later version.`);
   if (!isFirebaseHosting(host.chosen)) text(setup, `setup of ${host.chosen} (host.setup): the Builder's next step, since the Factory connects only Firebase Hosting itself`);
   const { visitorCountries } = location;
   if (!Array.isArray(visitorCountries) || visitorCountries.length === 0) throw new KickoffError("The Kickoff decisions have no location.visitorCountries.");

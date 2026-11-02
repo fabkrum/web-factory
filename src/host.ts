@@ -22,9 +22,16 @@ export class HostError extends Error {}
 
 /**
  * Whether the host named at Kickoff is the one the Firebase adapter serves: "Firebase" or
- * "Firebase Hosting", and nothing else. Firebase App Hosting is not: it rolls out one live
- * branch and has no preview channels.
+ * "Firebase Hosting", and nothing else.
  */
 export function isFirebaseHosting(host: string): boolean {
   return /^\s*firebase([\s_-]+hosting)?\s*$/i.test(host);
+}
+
+/**
+ * Whether the host named at Kickoff is Firebase App Hosting, which v1 does not offer: it rolls
+ * out one live branch and has no preview channels, and the Ticket loop needs a Preview (ADR 0007).
+ */
+export function isFirebaseAppHosting(host: string): boolean {
+  return /^\s*(firebase[\s_-]+)?app[\s_-]*hosting\s*$/i.test(host);
 }

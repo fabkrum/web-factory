@@ -27,8 +27,9 @@ Ask which one they use: Claude Code (`claude-code`), Codex (`codex`), Antigravit
 Offer at least two stacks and at least two hosts that fit the answers. For each option, give the case for and the case against in plain words. Then say which you recommend and why, and let the Builder choose. A Builder who picks against your recommendation has made a valid choice.
 
 - Follow the Modern Web Guidance skill when you weigh stacks.
-- Firebase is the recommended default host: Firebase Hosting for static output, Firebase App Hosting when the Site needs a server. Recommend something else when the answers call for it.
-- Firebase App Hosting has no preview channels, so the Factory connects only Firebase Hosting itself. A Builder who needs a server gets App Hosting as another host: say so, and that they must find their own way to a Preview.
+- This version of the Factory supports static output: recommend only stacks that produce it. A Site that needs a server has to wait for a later version: tell the Builder so, plainly, before they choose.
+- Firebase Hosting is the recommended default host. Recommend something else when the answers call for it.
+- Do not offer Firebase App Hosting: it has no preview channels, and `factory kickoff` refuses it.
 - Offer only hosts that give a Preview URL for a pull request. Approve needs something for the Builder to read.
 - If the Builder chooses a host other than Firebase Hosting, tell them the Factory has no adapter for it yet. Find out that host's own setup, and keep it as the text for `host.setup`: what the Builder has to do next, in plain words, with no line starting with `## `.
 
