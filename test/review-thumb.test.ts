@@ -389,6 +389,87 @@ document.querySelector("x-widget").attachShadow({ mode: "open" }).innerHTML = '<
     expect(thumb.failures).toEqual([]);
   });
 
+  it.each([
+    ["ontouchend", `ontouchend="location.href='/one'"`],
+    ["onpointerdown", `onpointerdown="location.href='/one'"`],
+    ["ontouchstart with a replace", `ontouchstart="location.replace('/one')"`],
+  ])("counts an item that leaves the page on the touch itself (%s) as tapped, and goes on to the next", async (_, handler) => {
+    const page = (open: string) => panelPage(open).replace(`<a href="/one">`, `<a href="/one" ${handler}>`);
+
+    const working = (await reviewPages({ "/": page(""), ...ROUTES })).thumb;
+    await site?.close();
+    site = undefined;
+    const nextFallsThrough = (await reviewPages({ "/": page("").replace("</style>", "#panel a + a { pointer-events: none; }</style>"), ...ROUTES })).thumb;
+
+    expect(working.notApplicable).toBeUndefined();
+    expect(working.failures).toEqual([]);
+    expect(nextFallsThrough.failures.map((failure) => failure.location)).toEqual(['/ at "Two"']);
+    expect(nextFallsThrough.failures[0]!.reason).toMatch(/page behind/i);
+  });
+
+  it("does not stop the review when every item leaves the page, and the next check still runs", async () => {
+    const leaves = (path: string) => `ontouchend="location.href='${path}'"`;
+    const page = panelPage("").replace(`<a href="/one">`, `<a href="/one" ${leaves("/one")}>`).replace(`<a href="/two">`, `<a href="/two" ${leaves("/two")}>`);
+    site = await servePages({ "/": page, ...ROUTES });
+    const { run, report, thumb } = await review(site.url, [THUMB, "visibility/canonical"]);
+
+    expect(run.exitCode).not.toBe(3);
+    expect(thumb.failures).toEqual([]);
+    expect(thumb.notApplicable).toBeUndefined();
+    expect(report.areas.flatMap((area) => area.checks).map((check) => check.id)).toContain("visibility/canonical");
+  });
+
+  it.each([["div"], ["p"], ["h3"]])("sees a menu of links that each wrap a <%s>, and catches its taps falling through", async (block) => {
+    const page = (open: string) =>
+      phonePage(
+        `#panel { display: none; } #panel.open { display: block; position: fixed; top: 3rem; left: 0; right: 0; background: #fff; z-index: 5; ${open} } #panel ${block} { margin: 0; padding: 1rem; }`,
+        `<button type="button">Menu</button><nav id="panel"><a href="/one"><${block}>One</${block}></a><a href="/two"><${block}>Two</${block}></a></nav>${TOGGLE_SCRIPT}`,
+      );
+
+    const working = (await reviewPages({ "/": page(""), ...ROUTES })).thumb;
+    await site?.close();
+    site = undefined;
+    const fallsThrough = (await reviewPages({ "/": page("pointer-events: none;"), ...ROUTES })).thumb;
+
+    expect(working.notApplicable).toBeUndefined();
+    expect(working.failures).toEqual([]);
+    expect(fallsThrough.failures.map((failure) => failure.location)).toEqual(['/ at "One"', '/ at "Two"']);
+  });
+
+  it.each([
+    ["fixed", "header { overflow: hidden; height: 3rem; }", "position: fixed; top: 3rem;"],
+    ["absolute past a static ancestor", "header { overflow: hidden; height: 3rem; }", "position: absolute; top: 3rem;"],
+  ])("sees a %s menu that escapes a header with overflow: hidden", async (_, header, position) => {
+    const page = (open: string) =>
+      phonePage(
+        `${header} #panel { display: none; } #panel.open { display: block; ${position} left: 0; right: 0; background: #fff; z-index: 5; ${open} } #panel a { display: block; padding: 1rem; }`,
+        `<header><button type="button">Menu</button><nav id="panel">${PANEL_LINKS}</nav></header>${TOGGLE_SCRIPT}`,
+      );
+
+    const working = (await reviewPages({ "/": page(""), ...ROUTES })).thumb;
+    await site?.close();
+    site = undefined;
+    const fallsThrough = (await reviewPages({ "/": page("pointer-events: none;"), ...ROUTES })).thumb;
+
+    expect(working.notApplicable).toBeUndefined();
+    expect(working.failures).toEqual([]);
+    expect(fallsThrough.failures.map((failure) => failure.location)).toEqual(['/ at "One"', '/ at "Two"']);
+  });
+
+  it.each([
+    ["fixed, held by a transformed ancestor", "transform: translateZ(0);", "position: fixed;"],
+    ["absolute, held by a positioned ancestor", "position: relative;", "position: absolute;"],
+  ])("counts a %s that clips it as cutting it away", async (_, holder, position) => {
+    const page = phonePage(
+      `header { overflow: hidden; height: 3rem; ${holder} } #panel { display: none; } #panel.open { display: block; ${position} top: 3rem; left: 0; right: 0; background: #fff; } #panel a { display: block; padding: 1rem; }`,
+      `<header><button type="button">Menu</button><nav id="panel">${PANEL_LINKS}</nav></header>${TOGGLE_SCRIPT}`,
+    );
+    const { thumb } = await reviewPages({ "/": page, ...ROUTES });
+
+    expect(thumb.notApplicable).toMatch(/no .*menu/i);
+    expect(thumb.failures).toEqual([]);
+  });
+
   it("does not leave the page or need the item's address to answer", async () => {
     const page = panelPage("").replace(`<a href="/two">Two</a>`, `<a href="#top">Two</a><a href="https://unreachable.invalid/" target="_blank">Three</a><a href="mailto:hello@example.com">Four</a>`);
     const { thumb } = await reviewPages({ "/": page, ...ROUTES });

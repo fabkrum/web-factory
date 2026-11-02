@@ -20,6 +20,9 @@ const MEASURE_EVERY = 50;
 const NO_MENU =
   "This Site has no phone menu: at phone width no button in its header, and no button named as a menu, opens a list of links. Links that are simply on the page have nothing to fall through.";
 
+const MOVED_ON =
+  "This page sent the browser on to another page by itself while its phone menu was being tapped, so the review could not finish tapping it. Check that the page holds still once it has loaded.";
+
 /**
  * Opens the Site's menu at phone width and taps every item with a real touch,
  * on every route, because what lets a tap through can sit on one page only. The
@@ -45,8 +48,9 @@ export const thumbCheck: ReviewCheck = {
         found = true;
         failures.push(...onRoute);
       } catch (error) {
-        if (!(error instanceof PageError)) throw error;
-        failures.push({ reason: error.message, location: route.path });
+        if (error instanceof PageError) failures.push({ reason: error.message, location: route.path });
+        else if (movedOn(error)) failures.push({ reason: MOVED_ON, location: route.path });
+        else throw error;
       } finally {
         await context.close();
       }
@@ -62,9 +66,21 @@ async function tapMenu(page: Page, route: Route): Promise<Failure[] | undefined>
   const names = await Promise.all(menu.items.map(nameOf));
   const failures: Failure[] = [];
   let open: Menu | undefined = menu;
+  // A tap is stopped before it clicks, but an item may leave the page on the touch itself.
+  const leaving: Leaving = {};
+  page.on("request", (request) => {
+    if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) return;
+    const arrived = page.waitForEvent("framenavigated", { predicate: (frame) => frame === page.mainFrame(), timeout: TAP_TIMEOUT });
+    leaving.landing = arrived.catch(() => undefined);
+  });
   for (const [place, name] of names.entries()) {
-    // A page may close its menu on the touch itself, before the tap is stopped.
-    if (open && !(await stillOpen(page, open, place))) open = await openAt(page, route, menu.place);
+    // Or a page may close its menu on the touch, before the tap is stopped.
+    if (open && (leaving.landing || !(await stillOpen(page, open, place)))) {
+      // Loading the page again while the browser is on its way elsewhere would be cut short by that arrival.
+      await leaving.landing;
+      open = await openAt(page, route, menu.place);
+      leaving.landing = undefined;
+    }
     const item = open?.items[place];
     if (!item) {
       failures.push({
@@ -73,10 +89,15 @@ async function tapMenu(page: Page, route: Route): Promise<Failure[] | undefined>
       });
       continue;
     }
-    const failure = await tapItem(page, item);
+    const failure = await tapItem(page, item, leaving);
     if (failure) failures.push({ reason: failure.reason, location: `${route.path} at "${failure.name}"` });
   }
   return failures;
+}
+
+/** The page's own trip to another page, set from the moment the browser asks for it until the menu is open again. */
+interface Leaving {
+  landing?: Promise<unknown>;
 }
 
 /** An open menu. Its elements hold only until the page loads again. */
@@ -117,8 +138,13 @@ async function openAt(page: Page, route: Route, place: number): Promise<Menu | u
 
 /** Whether a link of the open menu still shows, compared with the page before the menu opened. */
 async function stillOpen(page: Page, menu: Menu, place: number): Promise<boolean> {
-  const { links } = await scan(page, menu.closed);
-  return page.evaluate(({ links, item }) => links.includes(item as Element), { links, item: menu.items[place] });
+  try {
+    const { links } = await scan(page, menu.closed);
+    return await page.evaluate(({ links, item }) => links.includes(item as Element), { links, item: menu.items[place] });
+  } catch (error) {
+    if (movedOn(error)) return false;
+    throw error;
+  }
 }
 
 /** Taps a toggle and returns what it opened, or undefined when it took the browser to another page. */
@@ -148,8 +174,8 @@ async function tapToggle(page: Page, toggle: Control, place: number): Promise<Me
   }
 }
 
-/** One tap on a menu item: why it failed, or undefined when the item took it. */
-async function tapItem(page: Page, item: Control): Promise<{ name: string; reason: string } | undefined> {
+/** One tap on a menu item: why it failed, or undefined when the item took it, which sending the browser to another page also is. */
+async function tapItem(page: Page, item: Control, leaving: Leaving): Promise<{ name: string; reason: string } | undefined> {
   const name = await nameOf(item);
   const { x, y, onScreen } = await holdStill(page, item);
   if (!onScreen) {
@@ -162,7 +188,7 @@ async function tapItem(page: Page, item: Control): Promise<{ name: string; reaso
   // Wrapped in an object so that this returns once the listener is in place, not when the tap arrives.
   const listening = await item.evaluateHandle(
     (element, timeout) => ({
-      tap: new Promise<{ took: boolean; landed: string } | null>((resolve) => {
+      tap: new Promise<Landing | null>((resolve) => {
         const listener = (event: Event) => {
           event.preventDefault();
           event.stopImmediatePropagation();
@@ -180,16 +206,33 @@ async function tapItem(page: Page, item: Control): Promise<{ name: string; reaso
     }),
     TAP_TIMEOUT,
   );
-  await page.touchscreen.tap(x, y);
-  const tap = await listening.evaluate((waiting) => waiting.tap);
-  if (tap?.took) return undefined;
+  const tap = await tapped(page, x, y, listening);
+  if (tap === "left" || tap?.took) return undefined;
   if (!tap) {
+    if (leaving.landing) return undefined;
     return { name, reason: "Tapping this menu item at phone width does nothing: no element answers the tap, so a Visitor on a phone cannot follow it." };
   }
   return {
     name,
     reason: `This menu item looks tappable at phone width, but the tap goes past it to the page behind: it lands on ${tap.landed}. A Visitor taps the menu and gets something else. Keep the open menu above the page (z-index) and let it take taps (no pointer-events: none on it).`,
   };
+}
+
+/** Touches the spot and reads where the tap landed: null when no click came, "left" when the page went away first. */
+async function tapped(page: Page, x: number, y: number, listening: JSHandle<{ tap: Promise<Landing | null> }>): Promise<Landing | null | "left"> {
+  try {
+    await page.touchscreen.tap(x, y);
+    return await listening.evaluate((waiting) => waiting.tap);
+  } catch (error) {
+    if (movedOn(error)) return "left";
+    throw error;
+  }
+}
+
+/** Where a tap arrived: whether the item got it, and the tag of what did. */
+interface Landing {
+  took: boolean;
+  landed: string;
 }
 
 /** What a Builder calls this control or link. */
@@ -212,7 +255,8 @@ async function holdStill(page: Page, target: Control): Promise<Spot> {
 function spot(target: Control): Promise<Spot> {
   return target.evaluate((element) => {
     element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
-    const box = element.getClientRects()[0] ?? element.getBoundingClientRect();
+    // A link wrapping a block starts with an empty line box.
+    const box = [...element.getClientRects()].find((rect) => rect.width > 0 && rect.height > 0) ?? element.getBoundingClientRect();
     const x = box.left + box.width / 2;
     const y = box.top + box.height / 2;
     // An animation that never ends is decoration: waiting for it would only use up the time.
@@ -254,7 +298,7 @@ interface Scan {
  * sight are what a tap opened.
  *
  * 0: not there. Hidden, off to the side or above the screen, cut away by an
- * ancestor, or clipped so that nothing of it lies at its own spot.
+ * ancestor it is positioned in, or clipped so that nothing of it lies at its own spot.
  * 1: there, but no tap reaches it now. Below the screen, which is a closed bottom
  * sheet or the rest of the page, or lying under something else.
  * 2: on top at its own spot.
@@ -270,13 +314,26 @@ async function scan(page: Page, before?: Sights): Promise<Scan> {
     ({ selector, before }) => {
       const hides = (overflow: string) => overflow === "hidden" || overflow === "clip";
       const scrolls = (overflow: string) => overflow === "auto" || overflow === "scroll";
+      const holdsFixed = (style: CSSStyleDeclaration) =>
+        [style.transform, style.translate, style.rotate, style.scale, style.perspective, style.filter, style.backdropFilter].some((value) => value !== "none") ||
+        /paint|layout|strict|content/.test(style.contain) ||
+        /transform|translate|rotate|scale|perspective|filter/.test(style.willChange);
+      const holds = (style: CSSStyleDeclaration, position: string) => {
+        if (position === "fixed") return holdsFixed(style);
+        return position !== "absolute" || style.position !== "static" || holdsFixed(style);
+      };
       const sight = (element: Element): number => {
         if (!element.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return 0;
-        const box = element.getClientRects()[0] ?? element.getBoundingClientRect();
+        const box = [...element.getClientRects()].find((rect) => rect.width > 0 && rect.height > 0) ?? element.getBoundingClientRect();
         if (box.width === 0 || box.height === 0 || box.right <= 0 || box.left >= window.innerWidth || box.bottom <= 0) return 0;
         let [left, right, top, bottom] = [box.left, box.right, box.top, box.bottom];
+        let { position } = getComputedStyle(element);
         for (let parent = element.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
-          const { overflowX, overflowY } = getComputedStyle(parent);
+          const style = getComputedStyle(parent);
+          // What is positioned past an ancestor is not clipped by it, even when it lies in it in the page's code.
+          if (!holds(style, position)) continue;
+          position = style.position;
+          const { overflowX, overflowY } = style;
           if (overflowX === "visible" && overflowY === "visible") continue;
           const clip = parent.getBoundingClientRect();
           [left, right, top, bottom] = [Math.max(left, clip.left), Math.min(right, clip.right), Math.max(top, clip.top), Math.min(bottom, clip.bottom)];
