@@ -145,7 +145,7 @@ describe("the finished Spec", () => {
 
     expect(rerun.exitCode, rerun.stderr).toBe(0);
     expect(tracker.pullRequests).toHaveLength(1);
-    expect(host.previews.map((p) => p.url)).toEqual([host.previews[0]?.url, host.previews[0]?.url]);
+    expect(host.previews).toHaveLength(1);
     expect(originBranch(site, "main")).toBe(mainBefore);
   });
 
