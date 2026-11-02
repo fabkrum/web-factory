@@ -245,15 +245,22 @@ const VAT_WORD = String.raw`(?:MwSt|Mehrwertsteuer|USt|Umsatzsteuer|VAT)`;
 const IN_CLAUSE = String.raw`(?!,(?!\d)|[;!?]|(?<!\bgesetzl|\bges)\.\s)[^\n]`;
 
 /** A word that takes the VAT word after it away from the price. */
-const NOT_INCLUDED = String.raw`(?:zzgl|zuz[uü]gl\w*|ex[ck]l\w*|plus|ohne|without|kein\w*|nicht|not|no)`;
+const NOT_INCLUDED = String.raw`(?:zzgl|zuz[uü]gl\w*|ex[ck]l\w*|plus|ohne|without|kein\w*|nicht|not|no|weder)`;
+
+/** Words after the VAT word that put it on top of the price: "MwSt. extra". */
+const ON_TOP = String.raw`\.?\s*(?:extra|kommt\s+hinzu)\b`;
 
 /** The word brutto on its own: a "Brutto-Netto-Rechner" says nothing about a price. */
 const BRUTTO = String.raw`brutto\b(?![-–/]\s*netto)`;
 
-/** The page says its prices include VAT. */
+/**
+ * The page says its prices include VAT. A list of common wording, not proof that a price is gross:
+ * net prices in other words still pass, and one note counts for the whole page. That limit is
+ * accepted (see the README); do not grow this list for each new sentence that slips through.
+ */
 const VAT_INCLUDED = new RegExp(
   [
-    String.raw`(?<!nicht\s|not\s)\b(?:inkl|inklusive|incl|including|enth[aä]lt|enthalten)\b\.?(?:(?!\b${NOT_INCLUDED}\b)${IN_CLAUSE}){0,40}?\b${VAT_WORD}\b`,
+    String.raw`(?<!nicht\s|not\s)\b(?:inkl|inklusive|incl|including|enth[aä]lt|enthalten)\b\.?(?:(?!\b${NOT_INCLUDED}\b)${IN_CLAUSE}){0,40}?\b${VAT_WORD}\b(?!${ON_TOP})`,
     String.raw`(?<!\b${NOT_INCLUDED}\b\.?[^,;.\n]{0,20})\b${VAT_WORD}\.?\s+(?:is\s+|ist\s+)?(?:included|enthalten)`,
     String.raw`\bbrutto-?preis`,
     String.raw`\bpreise?\s+(?:sind\s+|ist\s+)?${BRUTTO}`,
@@ -276,7 +283,10 @@ const SMALL_BUSINESS_RULE = new RegExp(
 );
 
 /** The page adds VAT on top of a price, which a small business does not do. */
-const VAT_ADDED = new RegExp(String.raw`\b(?:zzgl|zuz[uü]gl\w*|ex[ck]l\w*|plus)\b\.?(?:${IN_CLAUSE}){0,40}?\b${VAT_WORD}\b`, "i");
+const VAT_ADDED = new RegExp(
+  String.raw`\b(?:zzgl|zuz[uü]gl\w*|ex[ck]l\w*|plus)\b\.?(?:${IN_CLAUSE}){0,40}?\b${VAT_WORD}\b|\b${VAT_WORD}\b${ON_TOP}`,
+  "i",
+);
 
 /** The first price on a page whose text does not say its prices are gross, or undefined. */
 export function priceWithoutGrossNote(text: string): string | undefined {
