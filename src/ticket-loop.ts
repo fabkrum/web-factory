@@ -8,6 +8,7 @@ import { branchExists, git, gitSucceeds, worktreeOf } from "./git.ts";
 import { LOCAL_DIR, recordTicketState, type TicketState } from "./loop-state.ts";
 import { couldNotRun, formatFailures } from "./review/report.ts";
 import type { ReviewReport } from "./review/review.ts";
+import { RunRecorder, runReportComment, saveRunReport } from "./run-report.ts";
 import { ServeError, withServedBuild } from "./served-build.ts";
 import { stageLabel } from "./stages.ts";
 import type { AgentCli } from "./agent-cli.ts";
@@ -46,6 +47,9 @@ export interface SpecPullRequest extends PullRequest {
   preview?: string;
   opened: boolean;
 }
+
+/** The loop's options once a run has begun, with what collects its Run report. */
+type InRun = LoopOptions & { run: RunRecorder };
 
 type Outcome = "passed" | "parked" | "not-passed";
 
@@ -95,6 +99,21 @@ export async function runTicketLoop(options: LoopOptions): Promise<LoopResult> {
     await git(siteDir, "branch", integration, config.baseBranch);
   }
 
+  const run = new RunRecorder(spec, options.clock.now());
+  try {
+    await buildTickets({ ...options, run }, all, tickets, result);
+  } catch (error) {
+    run.stoppedBecause((error as Error).message);
+    throw error;
+  } finally {
+    // With no Ticket to build, this run only repaired the Spec's pull request.
+    if (tickets.length > 0) await reportRun(options, run, result);
+  }
+  return result;
+}
+
+async function buildTickets(options: InRun, all: Issue[], tickets: Issue[], result: LoopResult): Promise<void> {
+  const { spec, tracker, log } = options;
   // Lowest unblocked Ticket first, looking again after every Ticket: a Pass may unblock a lower one.
   const outcomes = new Map<number, Outcome>();
   const states = new Map(all.map((ticket) => [ticket.number, ticket.state]));
@@ -118,7 +137,26 @@ export async function runTicketLoop(options: LoopOptions): Promise<LoopResult> {
   if (specDone(await tracker.ticketsOf(spec))) {
     result.pullRequest = await openSpecPullRequest(options);
   }
-  return result;
+}
+
+/**
+ * Stores the Run report and puts it on the Spec. Neither may change how the run ended,
+ * so a failure here is said and goes no further; each still happens if the other fails.
+ */
+async function reportRun({ siteDir, spec, tracker, clock, log }: LoopOptions, run: RunRecorder, { pullRequest }: LoopResult): Promise<void> {
+  const shown = pullRequest && { number: pullRequest.number, url: pullRequest.url, ...(pullRequest.preview ? { preview: pullRequest.preview } : {}) };
+  const report = run.finish(clock.now(), shown);
+  try {
+    await saveRunReport(join(siteDir, LOCAL_DIR), report);
+  } catch (error) {
+    log(`The Run report could not be stored, so Measure and the board will not see this run: ${(error as Error).message}`);
+  }
+  try {
+    await tracker.comment(spec, runReportComment(report));
+    log(`Spec #${spec}: the Run report is on the Spec and on the board`);
+  } catch (error) {
+    log(`The Run report could not be put on Spec #${spec}: ${(error as Error).message}`);
+  }
 }
 
 function specDone(tickets: Issue[]): boolean {
@@ -242,8 +280,8 @@ export function previewIn(body: string): string | undefined {
   return /^Preview: (\S+)$/m.exec(body)?.[1];
 }
 
-async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome> {
-  const { siteDir, spec, config, agentCli, log } = options;
+async function buildTicket(ticket: Issue, options: InRun): Promise<Outcome> {
+  const { siteDir, spec, config, agentCli, log, run } = options;
   const integration = integrationBranch(spec);
   const branch = ticketBranch(ticket.number);
 
@@ -264,6 +302,7 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
   const parkedFor = stillParked(history);
   if (parkedFor !== undefined) {
     log(`Ticket #${ticket.number}: parked, waiting for you. ${firstLine(parkedFor.reason)}`);
+    run.ticketState(ticket, { status: "parked", attempts: 0, reason: parkedFor.reason });
     return "parked";
   }
 
@@ -325,7 +364,12 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
         ? { passed: false as const, reason: `The Build session failed: ${session.reason}` }
         : await runGate(worktree, base, branch, integration, config.testCommand);
     if (gate.passed) {
-      await record(options, ticket, { status: "reviewing", attempts: attempt, reason: reason || undefined, failingChecks });
+      if (gate.flaky !== undefined) {
+        log(`Ticket #${ticket.number}: the tests were red, then green on the rerun, so they are recorded as flaky`);
+        run.flaky(ticket, gate.flaky);
+      }
+      const flaky = gate.flaky === undefined ? {} : { flaky: gate.flaky };
+      await record(options, ticket, { status: "reviewing", attempts: attempt, reason: reason || undefined, failingChecks, ...flaky });
       const review = await reviewTicket(ticket, options, worktree, base, gate.head, attempt);
       if ("question" in review) {
         return park(ticket, options, attempt, `The code review needs a decision from you: ${review.question}`, [
@@ -339,9 +383,9 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
       if (review.failed === undefined) {
         // Recorded before anything moves, so a run that dies before the Pass comment finishes it next time.
         await git(siteDir, "update-ref", passRef(ticket.number), gate.head);
-        const refused = await finishPass(ticket, options, gate.head);
+        const refused = await finishPass(ticket, options, gate.head, gate.flaky !== undefined);
         if (refused === undefined) {
-          await record(options, ticket, { status: "passed", attempts: attempt });
+          await record(options, ticket, { status: "passed", attempts: attempt, ...flaky });
           return "passed";
         }
         reason = refused;
@@ -355,6 +399,7 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
       failingChecks = undefined;
     }
     log(`Ticket #${ticket.number}: not passed. ${firstLine(reason)}`);
+    run.failedAttempt(ticket, attempt, reason, failingChecks);
     previous = `Your last attempt did not pass: ${reason}\n\nFix exactly that.`;
   }
 
@@ -375,7 +420,7 @@ type ReviewOutcome = { failed?: string; failingChecks?: string[] } | { question:
  * then the code review. The code review only ever runs on green checks, so no verdict of
  * its own can stand in for them. Whatever Review leaves in the worktree goes again.
  */
-async function reviewTicket(ticket: Issue, options: LoopOptions, worktree: string, base: string, head: string, attempt: number): Promise<ReviewOutcome> {
+async function reviewTicket(ticket: Issue, options: InRun, worktree: string, base: string, head: string, attempt: number): Promise<ReviewOutcome> {
   try {
     const failed = await runReviewChecks(options, worktree);
     if (failed !== undefined) return failed;
@@ -397,7 +442,7 @@ async function runReviewChecks({ config, reviewSite }: LoopOptions, worktree: st
   }
 }
 
-async function runCodeReview(ticket: Issue, options: LoopOptions, worktree: string, base: string, head: string, attempt: number): Promise<ReviewOutcome> {
+async function runCodeReview(ticket: Issue, options: InRun, worktree: string, base: string, head: string, attempt: number): Promise<ReviewOutcome> {
   const { agentCli, config, tracker, log } = options;
   for (;;) {
     await clearCodeReview(worktree);
@@ -432,7 +477,7 @@ async function restoreWorktree(worktree: string, branch: string, head: string): 
 }
 
 /** Sleeps until the Agent CLI's rate limit lifts, showing the Ticket as waiting on the board meanwhile. */
-async function waitOutRateLimit(ticket: Issue, options: LoopOptions, attempt: number, until: Date, failingChecks?: string[]): Promise<void> {
+async function waitOutRateLimit(ticket: Issue, options: InRun, attempt: number, until: Date, failingChecks?: string[]): Promise<void> {
   const { clock, log } = options;
   const ms = Math.max(until.getTime() - clock.now().getTime(), MIN_RATE_LIMIT_WAIT_MS);
   const resume = new Date(clock.now().getTime() + ms);
@@ -440,18 +485,20 @@ async function waitOutRateLimit(ticket: Issue, options: LoopOptions, attempt: nu
   log(`Ticket #${ticket.number}: ${reason}`);
   await record(options, ticket, { status: "waiting", attempts: attempt, reason, resumeAt: resume.toISOString(), failingChecks });
   await clock.sleep(ms);
+  options.run.waited(ticket, ms);
   log(`Ticket #${ticket.number}: the rate limit has lifted, resuming`);
 }
 
 /** Leaves the Ticket open in its Stage, says why on it, and marks it parked for the board. */
-async function park(ticket: Issue, options: LoopOptions, attempts: number, reason: string, comment: string[], failingChecks?: string[]): Promise<Outcome> {
+async function park(ticket: Issue, options: InRun, attempts: number, reason: string, comment: string[], failingChecks?: string[]): Promise<Outcome> {
   options.log(`Ticket #${ticket.number}: parked. ${firstLine(reason)}`);
   await options.tracker.comment(ticket.number, `${PARKED} ${comment.join("\n")}\n\n<!-- factory attempts: ${attempts} -->`);
   await record(options, ticket, { status: "parked", attempts, reason, failingChecks });
   return "parked";
 }
 
-async function record(options: LoopOptions, ticket: Issue, state: TicketState): Promise<void> {
+async function record(options: InRun, ticket: Issue, state: TicketState): Promise<void> {
+  options.run.ticketState(ticket, state);
   await recordTicketState(join(options.siteDir, LOCAL_DIR), options.spec, ticket.number, state);
 }
 
@@ -532,7 +579,7 @@ async function refTarget(siteDir: string, ref: string): Promise<string | undefin
  * Once the Pass comment is posted it is the record: the pass ref goes, and a rerun
  * that finds the comment last on the open Ticket only closes it.
  */
-async function finishPass(ticket: Issue, options: LoopOptions, head: string): Promise<string | undefined> {
+async function finishPass(ticket: Issue, options: LoopOptions, head: string, flaky = false): Promise<string | undefined> {
   const { siteDir, spec, tracker } = options;
   const integration = integrationBranch(spec);
   const branch = ticketBranch(ticket.number);
@@ -551,7 +598,7 @@ async function finishPass(ticket: Issue, options: LoopOptions, head: string): Pr
   if (worktree) await git(siteDir, "worktree", "remove", "--force", worktree);
   await tracker.comment(
     ticket.number,
-    `Pass. The Ticket loop built this Ticket on \`${branch}\`, its gate was green, and \`${integration}\` now contains it (${head}).`,
+    `Pass. The Ticket loop built this Ticket on \`${branch}\`, its gate was green${flaky ? " (the tests were red once and green on the rerun, recorded as flaky)" : ""}, and \`${integration}\` now contains it (${head}).`,
   );
   await git(siteDir, "update-ref", "-d", passRef(ticket.number));
   await closeAsPass(ticket, options);

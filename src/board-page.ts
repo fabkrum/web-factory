@@ -1,4 +1,4 @@
-import type { Board, Card, Column } from "./board.ts";
+import type { Board, BoardRunReport, Card, Column } from "./board.ts";
 
 /** The page reloads itself this often, so a Ticket's progress shows without touching it. */
 const RELOAD_MS = 30_000;
@@ -48,6 +48,9 @@ a { color: var(--link); }
 .card details { font-size: .875rem; white-space: pre-line; }
 .card .meta { color: var(--muted); }
 .card .failing { color: var(--alert); font-weight: 600; }
+.reports { margin-top: 1rem; }
+.reports h2 { margin: 0 0 .5rem; font-size: 1.25rem; }
+.reports .card { margin-bottom: .5rem; }
 .card .next { padding-top: .375rem; border-top: 1px solid var(--line); font-weight: 600; }
 @media (max-width: 48rem) {
   .pipeline { grid-auto-flow: row; grid-auto-columns: auto; overflow-x: visible; }
@@ -102,6 +105,24 @@ function columnHtml({ stage, kind, cards }: Column): string {
 </section>`;
 }
 
+function reportHtml({ spec, title, url, finishedAt, summary, details }: BoardRunReport): string {
+  const name = url ? `<a href="${escape(url)}">Spec #${spec}</a>` : `Spec #${spec}`;
+  return `<article class="card">
+<h3>${name}${title ? ` ${escape(title)}` : ""}</h3>
+<p class="meta">Finished at <time datetime="${escape(finishedAt)}">${escape(finishedAt)}</time></p>
+<p>${escape(summary)}</p>
+${details ? `<details><summary>The whole Run report</summary>${escape(details)}</details>` : ""}
+</article>`;
+}
+
+function reportsHtml(reports: BoardRunReport[]): string {
+  if (reports.length === 0) return "";
+  return `<section class="reports" aria-labelledby="run-reports">
+<h2 id="run-reports">Latest Run reports</h2>
+${reports.map(reportHtml).join("\n")}
+</section>`;
+}
+
 /** The board as one self-contained page; `problem` says why there is nothing to show. */
 export function renderBoard(board: Board, now: Date, problem?: string): string {
   const empty = board.columns.every((column) => column.cards.length === 0);
@@ -122,6 +143,7 @@ export function renderBoard(board: Board, now: Date, problem?: string): string {
 ${problem ? `<p class="note alert">${escape(problem)}</p>` : `<p class="note">${empty ? "Nothing is open yet. Ask your Agent CLI to use the request skill to bring your first idea." : `Read at <time datetime="${now.toISOString()}">${now.toISOString()}</time>. This page updates itself.`}</p>`}
 ${unstaged}
 ${board.columns.length > 0 ? `<div class="pipeline" role="region" aria-label="The Pipeline, one column per Stage" tabindex="0">\n${board.columns.map(columnHtml).join("\n")}\n</div>` : ""}
+${reportsHtml(board.runReports)}
 </main>
 <script>${LOCAL_TIMES}
 ${RELOAD}</script>

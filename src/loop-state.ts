@@ -14,6 +14,8 @@ export interface TicketState {
   reason?: string;
   /** The names of the Review checks that failed on the Ticket's last attempt. */
   failingChecks?: string[];
+  /** What the red run said when the Ticket's tests were only green on the rerun. */
+  flaky?: string;
   /** While waiting on a rate limit: when the Ticket loop resumes, as an ISO time. */
   resumeAt?: string;
 }

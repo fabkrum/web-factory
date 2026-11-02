@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { renderBoard } from "./board-page.ts";
 import type { Clock } from "./clock.ts";
 import { LOCAL_DIR, readAllLoopStates, type TicketState } from "./loop-state.ts";
+import { latestRunReports, runDetails, runSummary, type RunReport } from "./run-report.ts";
 import { DECISION_STAGES, isStageLabel, STAGES, type Stage } from "./stages.ts";
 import { lastPark } from "./ticket-loop.ts";
 import type { OpenIssue, Tracker } from "./tracker.ts";
@@ -39,6 +40,19 @@ export interface Board {
   columns: Column[];
   /** Open issues with no Stage label, which no column can hold. */
   withoutStage: { number: number; title: string; url: string }[];
+  /** The latest Run report of each Spec that has one, also of a Spec that is closed by now. */
+  runReports: BoardRunReport[];
+}
+
+/** A Spec's latest Run report in plain words. */
+export interface BoardRunReport {
+  spec: number;
+  /** Missing once the Spec is closed: only open issues reach the board. */
+  title?: string;
+  url?: string;
+  finishedAt: string;
+  summary: string;
+  details: string;
 }
 
 /** A reason the board cannot open, said in plain words. */
@@ -46,7 +60,8 @@ export class BoardError extends Error {}
 
 /** The board's data: the tracker says which Stage an issue is in, the loop's local state how a Ticket is doing. */
 export async function readBoard({ siteDir, tracker, clock }: { siteDir: string; tracker: Tracker; clock: Clock }): Promise<Board> {
-  const [issues, states] = await Promise.all([tracker.openIssues(), readAllLoopStates(join(siteDir, LOCAL_DIR))]);
+  const localDir = join(siteDir, LOCAL_DIR);
+  const [issues, states, reports] = await Promise.all([tracker.openIssues(), readAllLoopStates(localDir), latestRunReports(localDir)]);
   const columns: Column[] = STAGES.map((stage) => ({ stage, kind: DECISION_STAGES.includes(stage) ? "decision" : "automatic", cards: [] }));
   const withoutStage: Board["withoutStage"] = [];
   for (const issue of [...issues].sort((a, b) => a.number - b.number)) {
@@ -64,7 +79,18 @@ export async function readBoard({ siteDir, tracker, clock }: { siteDir: string; 
   for (const card of columns.find((column) => column.stage === "build")!.cards) {
     if (card.spec === undefined && specsWithTickets.has(card.number)) card.nextAction = "Nothing to do on this Spec: its Tickets show where it stands.";
   }
-  return { columns, withoutStage };
+  return { columns, withoutStage, runReports: reports.map((report) => boardReport(report, issues)) };
+}
+
+function boardReport(report: RunReport, issues: OpenIssue[]): BoardRunReport {
+  const issue = issues.find((candidate) => candidate.number === report.spec);
+  return {
+    spec: report.spec,
+    ...(issue ? { title: issue.title, url: issue.url } : {}),
+    finishedAt: report.finishedAt,
+    summary: runSummary(report),
+    details: runDetails(report),
+  };
 }
 
 function stageOf(issue: OpenIssue): Stage | undefined {
@@ -194,7 +220,7 @@ export async function serveBoard(options: {
       },
       (error: Error) => {
         response.writeHead(503, headers);
-        response.end(renderBoard({ columns: [], withoutStage: [] }, now(), `GitHub could not be reached, so the board cannot show your work right now: ${error.message}`));
+        response.end(renderBoard({ columns: [], withoutStage: [], runReports: [] }, now(), `GitHub could not be reached, so the board cannot show your work right now: ${error.message}`));
       },
     );
   });
