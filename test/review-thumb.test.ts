@@ -355,6 +355,45 @@ document.querySelector("button").addEventListener("click", () => {
     expect(nextFallsThrough.failures[0]!.reason).toMatch(/page behind/i);
   });
 
+  describe("a carousel link that comes into sight behind an opening menu", () => {
+    /** A menu filling the screen over a slide link that shows `flip` ms after the tap, so the review takes it for an item of the menu. */
+    const flipBehind = (open: string, flip: number) =>
+      phonePage(
+        `#panel { display: none; } #panel.open { display: block; position: fixed; inset: 0; background: #fff; z-index: 5; ${open} } #panel a { display: block; padding: 1rem; } #slide { display: none; position: absolute; inset: 0; z-index: 1; } #slide.shown { display: block; }`,
+        `<button type="button">Menu</button><nav id="panel">${PANEL_LINKS}</nav><a id="slide" href="/behind">Sale</a>${TOGGLE_SCRIPT}
+<script>document.querySelector("button").addEventListener("click", () => setTimeout(() => document.getElementById("slide").classList.add("shown"), ${flip}));</script>`,
+      );
+
+    it.each([
+      ["the menu around its items", ""],
+      ["an item", "display: grid; grid-auto-rows: 1fr;"],
+    ])("Passes a working menu: a tap on the slide link lands on %s over it, which is no fall-through", async (_, open) => {
+      const { thumb } = await reviewPages({ "/": flipBehind(open, 150), ...ROUTES });
+
+      expect(thumb.notApplicable).toBeUndefined();
+      expect(thumb.failures).toEqual([]);
+    });
+
+    it("still catches a menu whose taps reach that slide link", async () => {
+      const { thumb } = await reviewPages({ "/": flipBehind("pointer-events: none;", 150), ...ROUTES });
+
+      expect(thumb.failures.map((failure) => failure.location)).toEqual(expect.arrayContaining(['/ at "One"', '/ at "Two"']));
+      expect(thumb.failures[0]!.reason).toMatch(/page behind/i);
+    });
+
+    it.each([200, 500])("Passes a working menu over a carousel rotating every %i ms", async (every) => {
+      const page = phonePage(
+        `#panel { display: none; } #panel.open { display: block; position: fixed; inset: 0; background: #fff; z-index: 5; } #panel a { display: block; padding: 1rem; } .slide { display: none; position: absolute; inset: 3rem 0 0; z-index: 1; } .slide.shown { display: block; }`,
+        `<button type="button">Menu</button><nav id="panel">${PANEL_LINKS}</nav><a class="slide shown" href="/behind">A</a><a class="slide" href="/behind">B</a>${TOGGLE_SCRIPT}
+<script>setInterval(() => document.querySelectorAll(".slide").forEach((slide) => slide.classList.toggle("shown")), ${every});</script>`,
+      );
+      const { thumb } = await reviewPages({ "/": page, ...ROUTES });
+
+      expect(thumb.notApplicable).toBeUndefined();
+      expect(thumb.failures).toEqual([]);
+    });
+  });
+
   it("moves an item out from under a fixed bar at the bottom of the screen", async () => {
     const links = Array.from({ length: 12 }, (_, index) => `<a href="/one">Item ${index + 1}</a>`).join("");
     const page = phonePage(

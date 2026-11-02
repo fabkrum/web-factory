@@ -20,6 +20,9 @@ const READ_TIMEOUT = 5_000;
 const MEASURES = 40;
 const MEASURE_EVERY = 50;
 
+/** Lets the hit test see what `pointer-events` hides from it. */
+const ANY_POINTER = "* { pointer-events: auto !important; }";
+
 const NO_MENU =
   "This Site has no phone menu: at phone width no button in its header, and no button named as a menu, opens a list of links. Links that are simply on the page have nothing to fall through.";
 
@@ -89,7 +92,7 @@ async function tapMenu(context: BrowserContext, route: Route): Promise<Failure[]
         break;
       }
       try {
-        const tap = await tapItem(open.page, item);
+        const tap = await tapItem(open.page, item, open.items);
         left = tap.left;
         if (tap.failure) failures.push({ reason: tap.failure.reason, location: `${route.path} at "${tap.failure.name}"` });
         break;
@@ -191,8 +194,14 @@ async function tapToggle(page: Page, toggle: Control, place: number): Promise<Me
   }
 }
 
-/** One tap on a menu item: why it failed, if it did, and whether the page set off for another page. */
-async function tapItem(page: Page, item: Control): Promise<{ failure?: { name: string; reason: string }; left: boolean }> {
+/**
+ * One tap on a menu item: why it failed, if it did, and whether the page set off
+ * for another page. The tap counts as taken when it lands on the item, or on the
+ * menu lying over it: a page link that came into sight while the menu opened, such
+ * as a carousel's next slide, is read as an item, and the menu covers it. A tap
+ * that lands under the item fell through, whatever it lands on.
+ */
+async function tapItem(page: Page, item: Control, items: Control[]): Promise<{ failure?: { name: string; reason: string }; left: boolean }> {
   const name = await nameOf(item);
   const { x, y, onScreen } = await holdStill(page, item);
   if (!onScreen) {
@@ -207,10 +216,18 @@ async function tapItem(page: Page, item: Control): Promise<{ failure?: { name: s
   }
   // Wrapped in an object so that this returns once the listener is in place, not when the tap arrives.
   const listen = item.evaluateHandle(
-    (element, { x, y, timeout }) => {
+    (element, { x, y, timeout, items, anyPointer }) => {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(anyPointer);
+      const sheets = [...document.adoptedStyleSheets];
+      document.adoptedStyleSheets = [...sheets, sheet];
+      const stack = document.elementsFromPoint(x, y);
+      document.adoptedStyleSheets = sheets;
+      const above = stack.slice(0, Math.max(stack.findIndex((hit) => element.contains(hit)), 0));
+      const ofMenu = (target: Element) => above.includes(target) && items.some((other) => other.contains(target) || target.contains(other));
       const landing = (target: Element): Landing => {
         const tag = target.outerHTML.slice(0, target.outerHTML.indexOf(">") + 1);
-        return { took: element.contains(target), landed: tag.length > 100 ? `${tag.slice(0, 99)}…` : tag };
+        return { took: element.contains(target) || ofMenu(target), landed: tag.length > 100 ? `${tag.slice(0, 99)}…` : tag };
       };
       return {
         aimed: landing(document.elementFromPoint(x, y) ?? document.documentElement),
@@ -229,7 +246,7 @@ async function tapItem(page: Page, item: Control): Promise<{ failure?: { name: s
         }),
       };
     },
-    { x, y, timeout: TAP_TIMEOUT },
+    { x, y, timeout: TAP_TIMEOUT, items, anyPointer: ANY_POINTER },
   );
   const listening = await whileHere(listen, READ_TIMEOUT);
   // Asked before the touch: a page that leaves on the touch takes the answer of the click with it.
@@ -387,7 +404,7 @@ function scan(page: Page, before?: Sights): Promise<Scan> {
 
 async function readPage(page: Page, before?: Sights): Promise<Scan> {
   const found = await page.evaluateHandle(
-    ({ selector, before }) => {
+    ({ selector, before, anyPointer }) => {
       const hides = (overflow: string) => overflow === "hidden" || overflow === "clip";
       const scrolls = (overflow: string) => overflow === "auto" || overflow === "scroll";
       const holdsFixed = (style: CSSStyleDeclaration) =>
@@ -431,10 +448,10 @@ async function readPage(page: Page, before?: Sights): Promise<Scan> {
         [element.textContent, element.getAttribute("aria-label"), element.getAttribute("title")].some((label) => menuWord.test(label?.trim() ?? "")) ||
         [element.id, ...element.classList, ...(element.getAttribute("aria-controls") ?? "").split(/\s+/)].some((code) => menuCode.test(code));
       const onBar = (element: Element) => element.closest('header, nav, [role="banner"], [role="navigation"]') !== null;
-      const anyPointer = new CSSStyleSheet();
-      anyPointer.replaceSync("* { pointer-events: auto !important; }");
+      const anyPointerSheet = new CSSStyleSheet();
+      anyPointerSheet.replaceSync(anyPointer);
       const sheets = [...document.adoptedStyleSheets];
-      document.adoptedStyleSheets = [...sheets, anyPointer];
+      document.adoptedStyleSheets = [...sheets, anyPointerSheet];
       const toggles = [...document.querySelectorAll(selector)].filter((element) => sight(element) === 2);
       const sights = new Map([...document.querySelectorAll("a[href]")].map((link) => [link, sight(link)]));
       document.adoptedStyleSheets = sheets;
@@ -446,7 +463,7 @@ async function readPage(page: Page, before?: Sights): Promise<Scan> {
         toggles: [...toggles.filter(named), ...toggles.filter((element) => !named(element) && onBar(element))],
       };
     },
-    { selector: TOGGLES, before },
+    { selector: TOGGLES, before, anyPointer: ANY_POINTER },
   );
   return {
     links: await elementsOf(await found.getProperty("links")),
