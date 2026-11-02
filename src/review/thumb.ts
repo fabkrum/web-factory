@@ -14,7 +14,7 @@ const OPEN_QUIET = 300;
 
 /** How long a tap gets to reach anything, and how often a moving target is measured until it holds still. */
 const TAP_TIMEOUT = 2_000;
-/** How much longer than that a tap's answer may take to come back, and how long any other read of the page may: past that the page is on its way elsewhere. */
+/** How much longer than that a tap's answer may take to come back, and how long the touch or any other read of the page may: past that the page is on its way elsewhere or has frozen. */
 const ANSWER_MARGIN = 1_000;
 const READ_TIMEOUT = 5_000;
 const MEASURES = 40;
@@ -32,7 +32,8 @@ const MOVED_ON =
  * tap is stopped as it arrives, so the review reads which element it reached and
  * an item's address, dead or external, does not matter. A page can still leave on
  * the touch itself, before the tap arrives; the next item then gets a new page,
- * and no read waits for the page it left for, which may never answer.
+ * and no read or touch waits for the page it left for, which may never answer, or
+ * for a page frozen by its own script.
  */
 export const thumbCheck: ReviewCheck = {
   id: "accessibility/thumb-test",
@@ -74,7 +75,7 @@ async function tapMenu(context: BrowserContext, route: Route): Promise<Failure[]
   let left = false;
   for (const [place, name] of names.entries()) {
     for (let again = false; ; again = true) {
-      // A page may close its menu on the touch, before the tap is stopped, or be on its way elsewhere.
+      // A page may close its menu on the touch, before the tap is stopped, or be on its way elsewhere; stillOpen sees both.
       if (open && (left || !(await stillOpen(open, place)))) {
         open = await openAt(context, route, menu.place);
         left = false;
@@ -146,12 +147,15 @@ async function openAt(context: BrowserContext, route: Route, place: number): Pro
   return toggle && tapToggle(page, toggle, place);
 }
 
-/** Whether a link of the open menu still shows, compared with the page before the menu opened. */
+/** Whether a link of the open menu still shows, compared with the page before the menu opened. Asked once the link holds still: a closing menu shows its links until its animation ends. */
 async function stillOpen(menu: Menu, place: number): Promise<boolean> {
+  const item = menu.items[place];
+  if (!item) return false;
   try {
+    await holdStill(menu.page, item);
     const { links } = await scan(menu.page, menu.closed);
     return await whileHere(
-      menu.page.evaluate(({ links, item }) => links.includes(item as Element), { links, item: menu.items[place] }),
+      menu.page.evaluate(({ links, item }) => links.includes(item), { links, item }),
       READ_TIMEOUT,
     );
   } catch (error) {
@@ -160,14 +164,14 @@ async function stillOpen(menu: Menu, place: number): Promise<boolean> {
   }
 }
 
-/** Taps a toggle and returns what it opened, or undefined when it took the browser to another page. */
+/** Taps a toggle and returns what it opened, or undefined when it took the browser to another page or froze this one. */
 async function tapToggle(page: Page, toggle: Control, place: number): Promise<Menu | undefined> {
   const address = page.url();
   try {
     const { x, y } = await holdStill(page, toggle);
     // Read after holdStill: scrolling to the toggle moves the page's own links too.
     const { sights: closed } = await scan(page);
-    await page.touchscreen.tap(x, y);
+    await whileHere(page.touchscreen.tap(x, y), READ_TIMEOUT);
     const started = Date.now();
     let items: Control[] = [];
     let changed = started;
@@ -264,10 +268,10 @@ function sendsOff(page: Page, request: Request): boolean {
   }
 }
 
-/** Touches the spot and reads where the tap landed: null when no click came, "left" when the page went away first. */
+/** Touches the spot and reads where the tap landed: null when no click came, "left" when the page went away or froze first. */
 async function tapped(page: Page, x: number, y: number, listening: JSHandle<{ tap: Promise<Landing | null> }>): Promise<Landing | null | "left"> {
   try {
-    await page.touchscreen.tap(x, y);
+    await whileHere(page.touchscreen.tap(x, y), READ_TIMEOUT);
     return await whileHere(
       listening.evaluate((waiting) => waiting.tap),
       TAP_TIMEOUT + ANSWER_MARGIN,
@@ -292,7 +296,7 @@ function nameOf(target: Control): Promise<string> {
   );
 }
 
-/** Where to touch the target once it holds its place and nothing animates it any more, after scrolling it into view if it is not in view. */
+/** Where to touch the target once it holds its place and nothing animates it any more, after scrolling it into view if it is not in view or lies under something. */
 async function holdStill(page: Page, target: Control): Promise<Spot> {
   let last = await spot(target);
   for (let measure = 0; measure < MEASURES; measure++) {
@@ -309,13 +313,20 @@ function spot(target: Control): Promise<Spot> {
     target.evaluate((element) => {
       // A link wrapping a block starts with an empty line box.
       const place = () => [...element.getClientRects()].find((rect) => rect.width > 0 && rect.height > 0) ?? element.getBoundingClientRect();
-      // "nearest" leaves what is in view alone, and a page may close its menu on any scroll. What did need moving goes to the middle, clear of a sticky header.
+      const middle = () => {
+        const box = place();
+        return { box, x: box.left + box.width / 2, y: box.top + box.height / 2 };
+      };
+      const covered = () => {
+        const { x, y } = middle();
+        const hit = document.elementFromPoint(x, y);
+        return !hit || !element.contains(hit);
+      };
+      // "nearest" leaves what is in view alone, and a page may close its menu on any scroll. What did need moving, or lies under a bar, goes to the middle, clear of what is fixed to the screen's edges.
       const { top, left } = place();
       element.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
-      if (place().top !== top || place().left !== left) element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
-      const box = place();
-      const x = box.left + box.width / 2;
-      const y = box.top + box.height / 2;
+      if (place().top !== top || place().left !== left || covered()) element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+      const { box, x, y } = middle();
       // An animation that never ends is decoration: waiting for it would only use up the time.
       const moving = document.getAnimations().some((animation) => {
         const effect = animation.effect as KeyframeEffect | null;

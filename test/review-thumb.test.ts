@@ -332,6 +332,42 @@ document.querySelector("button").addEventListener("click", () => {
   });
 
   it.each([
+    ["slides", "touchend", "transform: translateX(-100%); transition: transform 0.3s;", "transform: none;"],
+    ["slides", "pointerdown", "transform: translateX(-100%); transition: transform 0.3s;", "transform: none;"],
+    ["fades", "touchend", "opacity: 0; transition: opacity 0.3s;", "opacity: 1;"],
+    ["fades", "pointerdown", "opacity: 0; transition: opacity 0.3s;", "opacity: 1;"],
+  ])("reopens a menu that %s shut on %s, and still taps what comes after", async (_, event, closed, open) => {
+    const page = (extra: string) =>
+      phonePage(
+        `#panel { position: fixed; top: 3rem; left: 0; right: 0; background: #fff; z-index: 5; ${closed} } #panel.open { ${open} } #panel a { display: block; padding: 1rem; } ${extra}`,
+        `<button type="button">Menu</button><nav id="panel">${PANEL_LINKS}</nav>${TOGGLE_SCRIPT}
+<script>document.getElementById("panel").addEventListener("${event}", () => document.getElementById("panel").classList.remove("open"));</script>`,
+      );
+
+    const working = (await reviewPages({ "/": page(""), ...ROUTES })).thumb;
+    await site?.close();
+    site = undefined;
+    const nextFallsThrough = (await reviewPages({ "/": page("#panel a + a { pointer-events: none; }"), ...ROUTES })).thumb;
+
+    expect(working.notApplicable).toBeUndefined();
+    expect(working.failures).toEqual([]);
+    expect(nextFallsThrough.failures.map((failure) => failure.location)).toEqual(['/ at "Two"']);
+    expect(nextFallsThrough.failures[0]!.reason).toMatch(/page behind/i);
+  });
+
+  it("moves an item out from under a fixed bar at the bottom of the screen", async () => {
+    const links = Array.from({ length: 12 }, (_, index) => `<a href="/one">Item ${index + 1}</a>`).join("");
+    const page = phonePage(
+      `#panel { display: none; position: absolute; top: 3rem; left: 0; right: 0; background: #fff; z-index: 5; } #panel.open { display: block; } #panel a { display: block; height: 88px; } #bar { position: fixed; left: 0; right: 0; bottom: 0; height: 64px; background: #000; z-index: 9; } #page-link { height: 200vh; }`,
+      `<button type="button">Menu</button><nav id="panel">${links}</nav><div id="bar">Call now</div>${TOGGLE_SCRIPT}`,
+    );
+    const { thumb } = await reviewPages({ "/": page, ...ROUTES });
+
+    expect(thumb.notApplicable).toBeUndefined();
+    expect(thumb.failures).toEqual([]);
+  });
+
+  it.each([
     ["See our menu", `<button type="button">See our menu</button>`],
     ["Print the menu of the day", `<button type="button">Print the menu of the day</button>`],
     ["an accordion about the menu", `<button type="button" aria-expanded="false">Our menu</button>`],
@@ -538,6 +574,25 @@ document.querySelector("button").addEventListener("click", () => {
 
     expect(thumb.notApplicable).toBeUndefined();
     expect(thumb.failures).toEqual([]);
+  }, 40_000);
+
+  it("does not wait for a page that freezes when a header button is tapped, and the next check still runs", async () => {
+    const page = phonePage("", `<header><button type="button" onclick="while (true) {}">Menu</button></header>`);
+    site = await servePages({ "/": page });
+    const { report, thumb } = await review(site.url, [THUMB, "visibility/canonical"]);
+
+    expect(thumb.notApplicable).toMatch(/no .*menu/i);
+    expect(thumb.failures).toEqual([]);
+    expect(report.areas.flatMap((area) => area.checks).map((check) => check.id)).toContain("visibility/canonical");
+  }, 40_000);
+
+  it("does not wait for a page that freezes on the touch of a menu item, and taps the rest", async () => {
+    const page = panelPage("").replace(`<a href="/one">`, `<a href="/one" ontouchstart="while (true) {}">`).replace("</style>", "#panel a + a { pointer-events: none; }</style>");
+    const { thumb } = await reviewPages({ "/": page, ...ROUTES });
+
+    expect(thumb.notApplicable).toBeUndefined();
+    expect(thumb.failures.map((failure) => failure.location)).toEqual(['/ at "Two"']);
+    expect(thumb.failures[0]!.reason).toMatch(/page behind/i);
   }, 40_000);
 
   describe("a dropdown that closes when the page scrolls", () => {
