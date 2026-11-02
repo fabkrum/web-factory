@@ -133,12 +133,11 @@ describe("the thumb test", () => {
     expect(new Set(thumb.failures.map((failure) => failure.location.split(" ")[0]))).toEqual(new Set(["/covered"]));
   });
 
-  it("fails a menu button that opens nothing", async () => {
+  it("counts a menu button that opens nothing as no menu", async () => {
     const { thumb } = await reviewPages({ "/": phonePage("", `<button type="button">Menu</button>`) });
 
-    expect(thumb.passed).toBe(false);
-    expect(thumb.failures[0]!.location).toMatch(/^\/ at "Menu"/);
-    expect(thumb.failures[0]!.reason).toMatch(/no links/i);
+    expect(thumb.notApplicable).toMatch(/no .*menu/i);
+    expect(thumb.failures).toEqual([]);
   });
 
   it("fails a menu item that runs off the screen", async () => {
@@ -280,6 +279,12 @@ document.querySelector("button").addEventListener("click", () => {
     ["an accordion about the menu", `<button type="button" aria-expanded="false">Our menu</button>`],
     ["btn-navy", `<button type="button" class="btn btn-navy">Book</button>`],
     ["carousel-nav", `<button type="button" class="carousel-nav" aria-controls="slides">Next</button><div id="slides"></div>`],
+    ["a hero's See our menu", `<header class="hero"><button type="button">See our menu</button></header>`],
+    ["an accordion in a section header", `<section><header><button type="button">Our menu</button></header></section>`],
+    ["Print menu", `<header><button type="button">Print menu</button></header>`],
+    ["Tagesmenü", `<button type="button">Tagesmenü</button>`],
+    ["a tab", `<button type="button" role="tab">Menu</button>`],
+    ["nav-button", `<button type="button" class="nav-button" aria-controls="slides">Next</button><div id="slides"></div>`],
   ])("does not fail a Site without a menu for a button like %s", async (_, button) => {
     const { thumb } = await reviewPages({ "/": phonePage("", button) });
 
@@ -287,12 +292,13 @@ document.querySelector("button").addEventListener("click", () => {
     expect(thumb.failures).toEqual([]);
   });
 
-  it("fails a menu button in the header or wired to a menu that opens nothing", async () => {
+  it("counts a button in the header or wired to a menu that opens nothing as no menu", async () => {
     for (const button of [`<header><button type="button">Open the menu</button></header>`, `<button type="button" class="hamburger" aria-controls="mobile-menu" aria-label="Open"></button>`]) {
       const { thumb } = await reviewPages({ "/": phonePage("", button) });
       await site?.close();
       site = undefined;
-      expect(thumb.failures[0]!.reason).toMatch(/no links/i);
+      expect(thumb.notApplicable).toMatch(/no .*menu/i);
+      expect(thumb.failures).toEqual([]);
     }
   });
 

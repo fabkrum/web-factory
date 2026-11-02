@@ -59,15 +59,6 @@ export const thumbCheck: ReviewCheck = {
 async function tapMenu(page: Page, route: Route): Promise<Failure[] | undefined> {
   const menu = await openMenu(page, route);
   if (!menu) return undefined;
-  if (menu.items.length === 0) {
-    return [
-      {
-        reason:
-          "Tapping this menu button at phone width shows no links, so a Visitor on a phone cannot get anywhere with it. Check that it opens the menu, and that nothing lies on top of it.",
-        location: `${route.path} at "${await nameOf(menu.toggle)}"`,
-      },
-    ];
-  }
   const names = await Promise.all(menu.items.map(nameOf));
   const failures: Failure[] = [];
   let open: Menu | undefined = menu;
@@ -92,23 +83,24 @@ async function tapMenu(page: Page, route: Route): Promise<Failure[] | undefined>
 interface Menu {
   /** Which of the page's toggles opened it, the one thing about it that outlasts a reload. */
   place: number;
-  toggle: Control;
   /** What the page showed before the tap, to tell the menu's links from the page's. */
   closed: Sights;
-  /** The links it showed; none when a control that is surely a menu button opened nothing. */
+  /** The links it showed; none when the control opened nothing. */
   items: Control[];
 }
 
 /**
  * Tries the page's toggles until one shows links. Most are not menus: a search
  * button shows a form, a Sign up button leaves the page, and each is undone by
- * loading the page again.
+ * loading the page again. A control that shows no links counts as no menu, however
+ * it is named, because no wording tells a dead menu button from "See our menu": this
+ * check answers for taps that fall through, and a dead menu goes unreported by it.
  */
 async function openMenu(page: Page, route: Route): Promise<Menu | undefined> {
   const { toggles } = await load(page, route);
   for (const [place, toggle] of toggles.entries()) {
-    const menu = place === 0 ? await tapToggle(page, toggle.element, place) : await openAt(page, route, place);
-    if (menu && (menu.items.length > 0 || toggle.firm)) return menu;
+    const menu = place === 0 ? await tapToggle(page, toggle, place) : await openAt(page, route, place);
+    if (menu && menu.items.length > 0) return menu;
   }
   return undefined;
 }
@@ -120,7 +112,7 @@ async function load(page: Page, route: Route): Promise<Scan> {
 
 async function openAt(page: Page, route: Route, place: number): Promise<Menu | undefined> {
   const toggle = (await load(page, route)).toggles[place];
-  return toggle && tapToggle(page, toggle.element, place);
+  return toggle && tapToggle(page, toggle, place);
 }
 
 /** Whether a link of the open menu still shows, compared with the page before the menu opened. */
@@ -148,7 +140,7 @@ async function tapToggle(page: Page, toggle: Control, place: number): Promise<Me
       items = links;
       if (items.length > 0 && Date.now() - changed >= OPEN_QUIET) break;
     }
-    return { place, toggle, closed, items };
+    return { place, closed, items };
   } catch (error) {
     if (movedOn(error)) return undefined;
     throw error;
@@ -237,7 +229,7 @@ interface Scan {
   links: Control[];
   sights: Sights;
   /** The toggles a Visitor can see: named as a menu first, then in the order of the page. */
-  toggles: { element: Control; firm: boolean }[];
+  toggles: Control[];
 }
 
 /**
@@ -246,9 +238,6 @@ interface Scan {
  * but cannot be reached (1): that is a closed bottom sheet when the menu is shut,
  * and an item a Visitor cannot get to when the menu is open, so what counts as
  * opened is what came further into sight. The rest is on the screen or scrolled to (2).
- *
- * A toggle is `firm` when it surely is a menu button, so that opening nothing is
- * a fault: "See our menu" on a restaurant's page may just be words.
  */
 async function scan(page: Page, before?: Sights): Promise<Scan> {
   const found = await page.evaluateHandle(
@@ -283,34 +272,24 @@ async function scan(page: Page, before?: Sights): Promise<Scan> {
       // Whether a control calls itself a menu, in the languages a Builder is likely to write in.
       const menuWord = /men[uüú](?!\p{L})|(?<!\p{L})nav(?:igation|egaci[oó]n)?(?!\p{L})/iu;
       const menuCode = /^(?:(?:main|mobile|site|primary|header|top|nav|hamburger)[-_]*)?(?:menu|nav|navbar|navigation|burger|hamburger)(?:[-_]*(?:toggle|toggler|button|btn|icon|trigger|open|opener))?$/i;
-      const describe = (element: Element) => {
-        const labels = [element.textContent, element.getAttribute("aria-label"), element.getAttribute("title")].map((label) => label?.trim() ?? "");
-        const codes = [element.id, ...element.classList, ...(element.getAttribute("aria-controls") ?? "").split(/\s+/)];
-        const spoken = labels.some((label) => menuWord.test(label));
-        const coded = codes.some((code) => menuCode.test(code));
-        const onBar = element.closest('header, nav, [role="banner"], [role="navigation"]') !== null;
-        const saysOnlyMenu = labels.some((label) => menuWord.test(label) && !/\s/.test(label));
-        const declared = element.matches("[aria-expanded], [aria-controls], [popovertarget]");
-        return { element, onBar, named: spoken || coded, firm: (spoken || coded) && (onBar || saysOnlyMenu || (coded && declared)) };
-      };
-      const toggles = [...document.querySelectorAll(selector)].filter((element) => sight(element) === 2).map(describe).filter((toggle) => toggle.named || toggle.onBar);
-      const ordered = [...toggles.filter((toggle) => toggle.named), ...toggles.filter((toggle) => !toggle.named)];
+      const named = (element: Element) =>
+        [element.textContent, element.getAttribute("aria-label"), element.getAttribute("title")].some((label) => menuWord.test(label?.trim() ?? "")) ||
+        [element.id, ...element.classList, ...(element.getAttribute("aria-controls") ?? "").split(/\s+/)].some((code) => menuCode.test(code));
+      const onBar = (element: Element) => element.closest('header, nav, [role="banner"], [role="navigation"]') !== null;
+      const toggles = [...document.querySelectorAll(selector)].filter((element) => sight(element) === 2);
       const sights = new Map([...document.querySelectorAll("a[href]")].map((link) => [link, sight(link)]));
       return {
         links: [...sights].flatMap(([link, now]) => (now > (before?.get(link) ?? 0) ? [link] : [])),
         sights,
-        toggles: ordered.map((toggle) => toggle.element),
-        firm: ordered.map((toggle) => toggle.firm),
+        toggles: [...toggles.filter(named), ...toggles.filter((element) => !named(element) && onBar(element))],
       };
     },
     { selector: TOGGLES, before },
   );
-  const firm = await found.evaluate((read) => read.firm);
-  const toggles = await elementsOf(await found.getProperty("toggles"));
   return {
     links: await elementsOf(await found.getProperty("links")),
     sights: await found.getProperty("sights"),
-    toggles: toggles.map((element, index) => ({ element, firm: firm[index] === true })),
+    toggles: await elementsOf(await found.getProperty("toggles")),
   };
 }
 
