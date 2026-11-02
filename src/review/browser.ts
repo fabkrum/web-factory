@@ -105,18 +105,32 @@ async function holdsStill(page: Page): Promise<boolean> {
 }
 
 /** The work's result, or a PageError for this page when it takes longer than `ms`. */
-async function within<T>(work: Promise<T>, ms: number): Promise<T> {
+function within<T>(work: Promise<T>, ms: number): Promise<T> {
+  return bounded(
+    work,
+    ms,
+    () =>
+      new PageError(
+        `This page did not hold still within ${ms / 1000} seconds: it sends the browser on to another page that never finishes loading, or is still busy, so the review could not check it. Check that it loads once in a browser and that any page it sends the browser on to answers.`,
+      ),
+  );
+}
+
+/**
+ * A read of a page that may be on its way elsewhere. While a navigation is pending
+ * the browser answers no read until the next page does, and that page may never
+ * answer, so a read that takes longer than `ms` counts as the page having moved on.
+ */
+export function whileHere<T>(read: Promise<T>, ms: number): Promise<T> {
+  return bounded(read, ms, () => new StillLeaving());
+}
+
+class StillLeaving extends Error {}
+
+async function bounded<T>(work: Promise<T>, ms: number, tooLate: () => Error): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () =>
-        reject(
-          new PageError(
-            `This page did not hold still within ${ms / 1000} seconds: it sends the browser on to another page that never finishes loading, or is still busy, so the review could not check it. Check that it loads once in a browser and that any page it sends the browser on to answers.`,
-          ),
-        ),
-      ms,
-    );
+    timer = setTimeout(() => reject(tooLate()), ms);
   });
   try {
     return await Promise.race([work, late]);
@@ -126,8 +140,8 @@ async function within<T>(work: Promise<T>, ms: number): Promise<T> {
 }
 
 /** The error Playwright throws when the page navigated away while the review was reading it. */
-function movedOn(error: unknown): boolean {
-  return !(error instanceof PageError) && error instanceof Error && /context was destroyed|navigat/i.test(error.message);
+export function movedOn(error: unknown): boolean {
+  return error instanceof StillLeaving || (!(error instanceof PageError) && error instanceof Error && /context was destroyed|context they were created|navigat/i.test(error.message));
 }
 
 /** Whether the page carries a meta refresh that fires at once. */

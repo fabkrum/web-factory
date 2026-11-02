@@ -1,3 +1,4 @@
+import { ConfigError } from "../config.ts";
 import { ReviewError } from "./check.ts";
 import type { ReviewReport } from "./review.ts";
 
@@ -7,12 +8,17 @@ const SHOWN_PER_CHECK = 10;
 /** The review as the Builder reads it in the terminal, grouped by Review area. */
 export function formatReport(report: ReviewReport): string {
   const lines = [`Review of ${report.url}`, `Routes checked: ${report.routes.join(", ")}`, ""];
-  for (const { area, checks } of report.areas) {
+  for (const { area, checks, note } of report.areas) {
     lines.push(area);
-    if (checks.length === 0) lines.push("  No Review checks in this area yet.");
+    if (note) lines.push(`  ${note}`);
+    else if (checks.length === 0) lines.push("  No Review checks in this area yet.");
     for (const check of checks) {
       if (check.skipped) {
         lines.push(`  NOT RUN  ${check.name}`, indent(check.skipped));
+        continue;
+      }
+      if (check.notApplicable) {
+        lines.push(`  NOT APPLICABLE  ${check.name}`, indent(check.notApplicable));
         continue;
       }
       lines.push(`  ${check.passed ? "PASS" : "FAIL"}  ${check.name}`);
@@ -52,7 +58,7 @@ export function formatFailures(report: ReviewReport): string {
 
 /** One plain-language reason the review could not run, with no stack trace. */
 export function couldNotRun(error: unknown): string {
-  if (error instanceof ReviewError) return error.message;
+  if (error instanceof ReviewError || error instanceof ConfigError) return error.message;
   const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0];
   return `The review stopped before it could check your whole Site (${detail}). Check that your Site is still being served, then run the review again.`;
 }

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { factory } from "../src/cli.ts";
 import { axeCheck } from "../src/review/axe.ts";
 import { runReview, type ReviewReport } from "../src/review/review.ts";
 import { ReviewError } from "../src/review/check.ts";
@@ -8,6 +9,7 @@ import { CODE_REVIEW_FILE } from "../src/code-review.ts";
 import type { ReviewSite } from "../src/ticket-loop.ts";
 import { approves, FakeAgentCli, reports, requestsChanges } from "./harness/fake-agent-cli.ts";
 import { FakeClock } from "./harness/fake-clock.ts";
+import { FakeHost } from "./harness/fake-host.ts";
 import { FakeTracker } from "./harness/fake-tracker.ts";
 import { runFactory } from "./harness/run-factory.ts";
 import { commitFile, createSiteRepo, git, writeFile } from "./harness/site-repo.ts";
@@ -129,6 +131,30 @@ describe("Review checks in the Ticket loop", () => {
     expect(agentCli.sessions[1]?.prompt).toContain(axeCheck.name);
     expect(tracker.issue(ticket).state).toBe("closed");
   });
+
+  it("runs the Locale pack a Site switched on: the loop's own Review, not a stand-in, fails a missing Impressum", async () => {
+    const site = createSiteRepo({
+      testCommand: "true",
+      maxAttempts: 1,
+      localePack: "de",
+      serveCommand: `node -e "require('http').createServer((q, s) => { s.setHeader('content-type', 'text/html'); s.end(require('fs').readFileSync('index.html')) }).listen(process.env.PORT)"`,
+    });
+    const { tracker, spec, ticket } = oneTicketSpec();
+    const agentCli = new FakeAgentCli(({ cwd }) => void commitFile(cwd, "index.html", `<!doctype html><html lang="de"><head><title>Start</title></head><body><main><h1>Start</h1></main></body></html>\n`));
+
+    await factory(["loop", String(spec)], {
+      cwd: site,
+      agentCli,
+      tracker,
+      host: new FakeHost(),
+      clock: new FakeClock(),
+      stdout: () => {},
+      stderr: () => {},
+    });
+
+    expect(tracker.issue(ticket).comments.at(-1)).toMatch(/^Parked\./);
+    expect(tracker.issue(ticket).comments.at(-1)).toContain("no working link to an Impressum");
+  }, 180_000);
 
   it("parks a Ticket that keeps failing a Review check, with the check's reason on it", async () => {
     const site = createSiteRepo({ testCommand: "true", maxAttempts: 2 });

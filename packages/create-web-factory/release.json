@@ -4,6 +4,12 @@
   "reviewChecks": [
     "performance/lighthouse",
     "accessibility/axe",
+    "accessibility/thumb-test",
+    "legal/impressum",
+    "legal/privacy-policy",
+    "legal/german-prices",
+    "legal/third-party-fonts",
+    "legal/third-party-requests",
     "visibility/sitemap",
     "visibility/canonical",
     "visibility/one-url",

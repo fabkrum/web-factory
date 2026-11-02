@@ -29,6 +29,15 @@ answer. A fixture changes them with a `headers.json` of its own, where `null`
 leaves a header out: `missing-csp` is served without its Content-Security-Policy, and with
 `X-Frame-Options` in place of the policy's `frame-ancestors`, so the policy is all it lacks.
 
+The German Locale pack's checks run from `../repos/german-locale-pack`, a Site
+repository with the pack on. `german-clean` is the fixture that passes them: a
+footer on every page links to an Impressum and a privacy policy, and its one price
+says "inkl. MwSt.". `missing-impressum`, `missing-privacy-policy` and
+`price-without-vat` start from `german-clean` instead of `clean`. A third party
+cannot be a static fixture, because its address has a port only known once it is
+served: those tests build their pages with `servePages`, and name a second local
+server as `localhost` where the Site is `127.0.0.1`.
+
 The Code & security checks that read the Site's repository (its own tests and
 its dependency advisories) take a Site repository from `../repos`, not a fixture
 Site: `clean` passes, `red-tests` has a test command that fails,
@@ -38,6 +47,12 @@ for, `no-lockfile` has no lockfile at all, and `pnpm-lockfile` and
 instead. The advisories check reports a Site locked by any package manager other
 than npm (pnpm, Yarn, Bun, Deno) as not run, and fails only a Site with no
 lockfile.
+
+`phone-menu` has a menu button at phone width whose links open above a link on
+the page, and must Pass the thumb test. `phone-menu-falls-through` looks the same
+but its open menu has `pointer-events: none`, so taps land on the page behind.
+Every other fixture has no phone menu, and the thumb test reports it as not
+applicable.
 
 The `design-*` Site repositories in `../repos` carry a Design handoff in `design/`
 for the `code/design` Review check: `design-clean` stands, and each of the others

@@ -30,6 +30,7 @@ export interface SiteRepoConfig {
   /** Null leaves it out of factory.json, as a Site from before this field would. */
   serveCommand?: string | null;
   serveTimeoutMs?: number;
+  localePack?: string;
 }
 
 /** A throwaway Site repository on `main` with its Factory config committed, and a bare `origin` it pushes to. */

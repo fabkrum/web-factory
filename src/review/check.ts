@@ -1,4 +1,5 @@
 import type { Browser } from "playwright";
+import type { LocalePack } from "../config.ts";
 
 /** The five Review areas every Ticket is checked in, in the order the Builder sees them. */
 export const REVIEW_AREAS = ["Performance", "Accessibility", "Privacy & legal", "Visibility", "Code & security"] as const;
@@ -39,12 +40,19 @@ export interface ReviewCheck {
   area: ReviewArea;
   /** True for a check that reads the Site's repository (its tests, its dependencies): it runs only when there is one. */
   needsRepo?: boolean;
-  run(site: SiteUnderReview): Promise<Failure[] | NotRun>;
+  /** The Locale pack this check belongs to: it runs only on a Site with that pack on. */
+  localePack?: LocalePack;
+  run(site: SiteUnderReview): Promise<Failure[] | NotRun | NotApplicable>;
 }
 
 /** What a check returns when it could not measure this Site at all, with why in plain language; it does not stop a Pass. */
 export interface NotRun {
   notRun: string;
+}
+
+/** What a check returns when it measured the Site and found nothing it applies to, with why in plain language; it does not stop a Pass. */
+export interface NotApplicable {
+  notApplicable: string;
 }
 
 /** Anything that stops a review from measuring the Site at all, in words the Builder can act on. */

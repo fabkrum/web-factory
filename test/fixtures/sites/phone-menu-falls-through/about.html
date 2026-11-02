@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Phone menu fixture: about</title>
+    <meta name="description" content="A fixture Site for the Review checks.">
+    <link rel="canonical" href="https://www.example.com/about.html">
+    <meta property="og:title" content="Phone menu fixture: about">
+    <meta property="og:description" content="A fixture Site for the Review checks.">
+    <meta property="og:image" content="https://www.example.com/social.png">
+    <style>
+      body { font-family: system-ui, sans-serif; color: #1a1a1a; background: #ffffff; margin: 0; }
+      a { color: #0b4fa8; }
+      #menu-button { display: none; }
+      @media (max-width: 47.99rem) {
+        #menu-button { display: block; margin: 0.5rem; padding: 0.75rem 1rem; }
+        #menu { display: none; }
+        #menu.open { display: block; position: fixed; inset: 4rem 0 0 0; background: #ffffff; padding: 1rem; z-index: 10; pointer-events: none; }
+        #menu a { display: block; padding: 1rem; }
+        .page-link { position: fixed; inset: 4rem 0 0 0; padding: 1rem; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <button id="menu-button" type="button" aria-expanded="false" aria-controls="menu">Menu</button>
+      <nav id="menu" aria-label="Main">
+        <a href="/">Home</a>
+        <a href="/about.html">About</a>
+      </nav>
+    </header>
+    <main>
+      <h1>About</h1>
+      <p>This page is here so the Review has a second route to find.</p>
+      <a class="page-link" href="/">Back home, from the page itself</a>
+    </main>
+    <script>
+      document.getElementById("menu-button").addEventListener("click", (event) => {
+        const open = document.getElementById("menu").classList.toggle("open");
+        event.currentTarget.setAttribute("aria-expanded", String(open));
+      });
+    </script>
+  </body>
+</html>
