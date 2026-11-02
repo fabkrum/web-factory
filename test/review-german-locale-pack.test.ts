@@ -128,6 +128,10 @@ describe("what the German price check reads on a page", () => {
     ["two dashes after the comma", "49,-- EUR"],
     ["a dash with the currency first", "€ 49,-"],
     ["an amount straight after EUR", "EUR49"],
+    ["a dash after the dot", "49.- €"],
+    ["two dashes after the dot", "49.-- EUR"],
+    ["the word Euro first", "Euro 49"],
+    ["the word Euro first, with a dash", "Euro 49,-"],
   ])("fails %s", (_, text) => {
     expect(priceWithoutGrossNote(text)).toBeDefined();
   });
@@ -135,6 +139,8 @@ describe("what the German price check reads on a page", () => {
   it("names the price as the page shows it, its dash included", () => {
     expect(priceWithoutGrossNote("49,- €")).toBe("49,- €");
     expect(priceWithoutGrossNote("€ 49,-")).toBe("€ 49,-");
+    expect(priceWithoutGrossNote("49.- €")).toBe("49.- €");
+    expect(priceWithoutGrossNote("Euro 49")).toBe("Euro 49");
   });
 });
 

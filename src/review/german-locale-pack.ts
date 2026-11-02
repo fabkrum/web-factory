@@ -234,10 +234,10 @@ function shownPath(address: string): string {
   return `${url.pathname}${url.search}`;
 }
 
-const AMOUNT = String.raw`\d[\d.,]*(?:(?<=,)[-–—]+)?`;
+const AMOUNT = String.raw`\d[\d.,]*(?:(?<=[.,])[-–—]+)?`;
 
-/** An amount in euros as a page shows it: 49,00 €, EUR 49, EUR49, 12 Euro, 49,- €. */
-const PRICE = new RegExp(String.raw`${AMOUNT}\s?(?:€|EUR\b|Euro\b)|(?:€|\bEUR)\s?${AMOUNT}`, "i");
+/** An amount in euros as a page shows it: 49,00 €, EUR 49, EUR49, Euro 49, 12 Euro, 49,- €, 49.- €. */
+const PRICE = new RegExp(String.raw`${AMOUNT}\s?(?:€|EUR\b|Euro\b)|(?:€|\bEUR|\bEuro)\s?${AMOUNT}`, "i");
 
 const VAT_WORD = String.raw`(?:MwSt|Mehrwertsteuer|USt|Umsatzsteuer|VAT)`;
 
