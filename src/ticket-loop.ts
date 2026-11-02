@@ -245,7 +245,7 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
   // A parked Ticket waits for the Builder: until something happens on it after the park comment.
   const parkedFor = stillParked(history);
   if (parkedFor !== undefined) {
-    log(`Ticket #${ticket.number}: parked, waiting for you. ${firstLine(parkedFor)}`);
+    log(`Ticket #${ticket.number}: parked, waiting for you. ${firstLine(parkedFor.reason)}`);
     return "parked";
   }
 
@@ -428,7 +428,7 @@ async function waitOutRateLimit(ticket: Issue, options: LoopOptions, attempt: nu
 /** Leaves the Ticket open in its Stage, says why on it, and marks it parked for the board. */
 async function park(ticket: Issue, options: LoopOptions, attempts: number, reason: string, comment: string[], failingChecks?: string[]): Promise<Outcome> {
   options.log(`Ticket #${ticket.number}: parked. ${firstLine(reason)}`);
-  await options.tracker.comment(ticket.number, `${PARKED} ${comment.join("\n")}`);
+  await options.tracker.comment(ticket.number, `${PARKED} ${comment.join("\n")}\n\n<!-- factory attempts: ${attempts} -->`);
   await record(options, ticket, { status: "parked", attempts, reason, failingChecks });
   return "parked";
 }
@@ -439,10 +439,19 @@ async function record(options: LoopOptions, ticket: Issue, state: TicketState): 
 
 const PARKED = "Parked.";
 
-/** The park comment, when it is the last thing that happened on the Ticket. */
-export function stillParked(history: IssueEvent[]): string | undefined {
+/** The attempt count at the end of a park comment, hidden from the page so another machine's board can read it. */
+const PARK_ATTEMPTS = /\s*<!-- factory attempts: (\d+) -->\s*$/;
+
+/**
+ * The park comment, when it is the last thing that happened on the Ticket. `attempts` is
+ * missing when the comment carries no count, as one written by hand does.
+ */
+export function stillParked(history: IssueEvent[]): { reason: string; attempts?: number } | undefined {
   const last = history.at(-1);
-  return last?.kind === "comment" && last.body.startsWith(PARKED) ? last.body.slice(PARKED.length).trim() : undefined;
+  if (last?.kind !== "comment" || !last.body.startsWith(PARKED)) return undefined;
+  const body = last.body.slice(PARKED.length);
+  const count = PARK_ATTEMPTS.exec(body)?.[1];
+  return { reason: body.replace(PARK_ATTEMPTS, "").trim(), ...(count === undefined ? {} : { attempts: Number(count) }) };
 }
 
 /** What the session needs to know when the Builder answered a park: the park comment and everything said since. */

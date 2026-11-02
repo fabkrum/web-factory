@@ -14,7 +14,8 @@ export interface Card {
   url: string;
   /** The Spec of a Ticket. */
   spec?: number;
-  attempts: number;
+  /** Missing when the Ticket parked on another machine and its park comment carries no count. */
+  attempts?: number;
   /** Where the Ticket stands in the Ticket loop; missing when it is not in it. */
   status?: TicketState["status"];
   failingChecks: string[];
@@ -77,6 +78,7 @@ async function cardOf(issue: OpenIssue, stage: Stage, recorded: TicketState | un
   return {
     ...base,
     ...failing,
+    attempts: state.attempts,
     status: state.status,
     ...(state.reason === undefined ? {} : { reason: state.reason }),
     ...(state.resumeAt === undefined ? {} : { resumeAt: state.resumeAt }),
@@ -84,18 +86,21 @@ async function cardOf(issue: OpenIssue, stage: Stage, recorded: TicketState | un
   };
 }
 
+/** A Ticket's state as the board knows it: the count can be missing for a Ticket parked elsewhere. */
+type KnownState = Omit<TicketState, "attempts"> & { attempts?: number };
+
 /**
  * The tracker holds the park comment, so a Ticket parked on another machine, whose local
- * state is not here, still shows as parked with its reason.
+ * state is not here, still shows as parked with its reason and attempt count.
  */
-async function withParkFromTracker(issue: OpenIssue, recorded: TicketState | undefined, tracker: Tracker): Promise<TicketState | undefined> {
+async function withParkFromTracker(issue: OpenIssue, recorded: TicketState | undefined, tracker: Tracker): Promise<KnownState | undefined> {
   if (recorded) return recorded;
-  const reason = stillParked(await tracker.historyOf(issue.number));
-  return reason === undefined ? undefined : { status: "parked", attempts: 0, reason };
+  const parked = stillParked(await tracker.historyOf(issue.number));
+  return parked && { status: "parked", ...parked };
 }
 
 /** Whether something happened on a parked Ticket since its park comment; the tracker decides that, not the local state. */
-async function answered(issue: OpenIssue, state: TicketState, tracker: Tracker): Promise<boolean> {
+async function answered(issue: OpenIssue, state: KnownState, tracker: Tracker): Promise<boolean> {
   return state.status === "parked" && stillParked(await tracker.historyOf(issue.number)) === undefined;
 }
 
@@ -103,7 +108,7 @@ function loopCommand(spec: number | undefined): string {
   return `factory loop ${spec ?? "<the number of its Spec>"}`;
 }
 
-function loopAction(issue: OpenIssue, state: TicketState, wasAnswered: boolean, spec: number | undefined, clock: Clock): string {
+function loopAction(issue: OpenIssue, state: KnownState, wasAnswered: boolean, spec: number | undefined, clock: Clock): string {
   const again = loopCommand(spec);
   switch (state.status) {
     case "parked":

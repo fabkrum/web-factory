@@ -40,7 +40,7 @@ The Review check `code/design` runs on every Ticket: DESIGN.md's lint and contra
 
 ## The board
 
-`npm run board` (or `factory board`) opens a local page drawn like the workshop diagram: one column per Stage, Decision stages blue, Automatic stages green. Every open Request and Ticket sits in the column of its Stage label, with its attempt count, the failing Review check, the reason in plain words and the one next action. A Ticket waiting on a rate limit shows as waiting, with its resume time. The page reloads itself every 30 seconds, except while you read a whole reason, and the board stays open until you press Ctrl+C.
+`npm run board` (or `factory board`) opens a local page drawn like the workshop diagram: one column per Stage, Decision stages blue, Automatic stages green. Every open Request and Ticket sits in the column of its Stage label, with its attempt count, the failing Review check, the reason in plain words and the one next action. A Ticket parked on another machine shows too: its park comment carries the reason and the attempt count. A Ticket waiting on a rate limit shows as waiting, with its resume time. The page reloads itself every 30 seconds, except while you read a whole reason, and the board stays open until you press Ctrl+C.
 
 In a Codespace the command prints the address of the forwarded port; open that one. The board listens on port 4400 on your own machine only; `--port` picks another port, and `--json` prints the board's data once instead.
 

@@ -82,7 +82,7 @@ function statusOf(card: Card): string {
 }
 
 function cardHtml(card: Card): string {
-  const attempts = `${card.attempts} ${card.attempts === 1 ? "attempt" : "attempts"}`;
+  const attempts = card.attempts === undefined ? "Attempts not known here: parked on another machine" : `${card.attempts} ${card.attempts === 1 ? "attempt" : "attempts"}`;
   const failing = card.failingChecks.length > 0
     ? `<p class="failing">Failing Review ${card.failingChecks.length === 1 ? "check" : "checks"}: ${card.failingChecks.map(escape).join(", ")}</p>`
     : "";

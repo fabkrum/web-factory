@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Board, Card } from "../src/board.ts";
+import { renderBoard } from "../src/board-page.ts";
 import { factory } from "../src/cli.ts";
 import { launchBrowser } from "../src/review/browser.ts";
 import type { ReviewReport } from "../src/review/review.ts";
@@ -113,6 +114,40 @@ describe("the board's data", () => {
     await tracker.comment(ticket, "Green.");
 
     expect(cardIn(await boardOf(site, tracker), "build", ticket).nextAction).toMatch(new RegExp(`run the Ticket loop again: factory loop ${spec}`));
+  });
+
+  it("shows the attempts of a Ticket parked on another machine, for each way of parking", async () => {
+    const parkedAfterAttempts = async (cli: FakeAgentCli, maxAttempts: number) => {
+      const tracker = new FakeTracker();
+      const spec = tracker.addSpec("A greeting page");
+      const ticket = tracker.addTicket(spec, "Say hello");
+      await runFactory(["loop", String(spec)], { cwd: createSiteRepo({ testCommand: "true", maxAttempts }), agentCli: cli, tracker, reviewSite: failsCanonical });
+      return cardIn(await boardOf(emptySite(), tracker), "build", ticket);
+    };
+    const work = ({ cwd }: { cwd: string }) => void commitFile(cwd, `work-${Date.now()}-${Math.random()}.txt`, "work\n");
+    const ask = () => ({ kind: "decision" as const, question: "Blue or green?" });
+
+    const limit = await parkedAfterAttempts(new FakeAgentCli(work, work), 2);
+    expect(limit).toMatchObject({ status: "parked", attempts: 2 });
+    expect(limit.reason).toMatch(/tried this Ticket 2 times/);
+    expect(limit.reason).not.toMatch(/factory attempts/);
+
+    const decision = await parkedAfterAttempts(new FakeAgentCli(work, ask), 3);
+    expect(decision).toMatchObject({ status: "parked", attempts: 2 });
+    expect(decision.reason).not.toMatch(/factory attempts/);
+  });
+
+  it("states no number for a parked Ticket whose comment carries no count", async () => {
+    const tracker = new FakeTracker();
+    const spec = tracker.addSpec("A greeting page");
+    const ticket = tracker.addTicket(spec, "Say hello");
+    await tracker.comment(ticket, "Parked. Written by hand.");
+
+    const board = await boardOf(emptySite(), tracker);
+
+    expect(cardIn(board, "build", ticket).attempts).toBeUndefined();
+    const page = renderBoard(board, new Date(0));
+    expect(page).toContain(`#${ticket}</a> Say hello</h3>\n<p class="meta">Attempts not known here: parked on another machine</p>`);
   });
 
   it("finds a parked Ticket on GitHub when this machine has no local state for it", async () => {
