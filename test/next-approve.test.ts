@@ -13,6 +13,7 @@ import { commitFile, createSiteRepo, git, originBranch, writeFile } from "./harn
 
 const TEMPLATE_AGENTS = readFileSync(resolve(import.meta.dirname, "..", "packages/create-web-factory/template/AGENTS.md"), "utf8");
 const KICKED_OFF = "# Site\n\n## Stack\n\n- Stack: Astro\n";
+const PARK_COMMENT = "Parked. The Ticket loop tried this Ticket 1 time and it did not pass.";
 
 function kickedOffSite(): string {
   const dir = mkdtempSync(join(tmpdir(), "web-factory-next-"));
@@ -206,6 +207,53 @@ describe("factory next", () => {
 
     expect(step.action).toMatch(/Nothing to do while the Ticket loop runs/);
     expect(step).toMatchObject({ issue: tickets[building] });
+  });
+
+  describe.each([
+    ["the lower Ticket", 0],
+    ["the higher Ticket", 1],
+  ])("with %s building beside a Ticket that stopped, in one Spec", (_, building) => {
+    function site(status: "parked" | "not-passed") {
+      const tracker = new FakeTracker();
+      const spec = inStage(tracker, "build");
+      const tickets = [tracker.addTicket(spec, "Home page"), tracker.addTicket(spec, "About page")];
+      const [runs, stopped] = [tickets[building]!, tickets[1 - building]!];
+      const dir = kickedOffSite();
+      writeFile(dir, `.factory/spec-${spec}.json`, JSON.stringify({ tickets: { [runs]: { status: "building", attempts: 1 }, [stopped]: { status, attempts: 1, reason: "A reason." } } }));
+      return { tracker, dir, runs, stopped };
+    }
+
+    it("asks for the answer on a parked Ticket, says the loop has to finish first, and names no loop to start", async () => {
+      const { tracker, dir, stopped } = site("parked");
+      await tracker.comment(stopped, PARK_COMMENT);
+
+      const step = await next(tracker, dir);
+
+      expect(step).toMatchObject({ issue: stopped });
+      expect(step.action).toContain(`Ticket #${stopped}`);
+      expect(step.action).toMatch(/running Ticket loop has to finish first/);
+      expect(step.action).not.toContain("factory loop");
+    });
+
+    it("waits for the running loop once a parked Ticket is answered", async () => {
+      const { tracker, dir, runs, stopped } = site("parked");
+      await tracker.comment(stopped, PARK_COMMENT);
+      await tracker.comment(stopped, "Blue.");
+
+      const step = await next(tracker, dir);
+
+      expect(step).toMatchObject({ issue: runs });
+      expect(step.action).toMatch(/Nothing to do while the Ticket loop runs/);
+    });
+
+    it("waits for the running loop beside a Ticket that did not pass", async () => {
+      const { tracker, dir, runs } = site("not-passed");
+
+      const step = await next(tracker, dir);
+
+      expect(step).toMatchObject({ issue: runs });
+      expect(step.action).toMatch(/Nothing to do while the Ticket loop runs/);
+    });
   });
 
   it("still starts the loop of another Spec while one Spec's loop runs", async () => {

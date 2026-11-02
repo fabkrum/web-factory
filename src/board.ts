@@ -19,6 +19,8 @@ export interface Card {
   /** Where the Ticket stands in the Ticket loop; missing when it is not in it. */
   status?: TicketState["status"];
   failingChecks: string[];
+  /** A parked Ticket the Builder has answered, so it only waits for the Ticket loop. */
+  answered?: boolean;
   /** Why it is stuck, in plain words. */
   reason?: string;
   /** While waiting on a rate limit: when the Ticket loop resumes, as an ISO time. */
@@ -80,6 +82,7 @@ async function cardOf(issue: OpenIssue, stage: Stage, recorded: TicketState | un
   if (!state) return { ...base, ...failing, nextAction: `Start the Ticket loop: ${loopCommand(spec)}` };
   // A Pass reopened by hand is no longer a Pass: to the loop it is a Ticket to build again.
   if (state.status === "passed") return { ...base, ...failing, nextAction: `Run the Ticket loop again: ${loopCommand(spec)}` };
+  const wasAnswered = await answered(issue, state, tracker);
   return {
     ...base,
     ...failing,
@@ -87,7 +90,8 @@ async function cardOf(issue: OpenIssue, stage: Stage, recorded: TicketState | un
     status: state.status,
     ...(state.reason === undefined ? {} : { reason: state.reason }),
     ...(state.resumeAt === undefined ? {} : { resumeAt: state.resumeAt }),
-    nextAction: loopAction(issue, state, await answered(issue, state, tracker), spec, clock),
+    ...(wasAnswered ? { answered: true } : {}),
+    nextAction: loopAction(issue, state, wasAnswered, spec, clock),
   };
 }
 

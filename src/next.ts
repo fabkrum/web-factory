@@ -29,14 +29,20 @@ const SKILLS: Partial<Record<Kind, BuilderSkill>> = { approve: "approve", design
 
 const isRunning = ({ status }: Card): boolean => status === "building" || status === "reviewing" || status === "waiting";
 
+/** A Spec has one Ticket loop: a second one beside the running loop would collide with it. */
+const loopRunsFor = ({ spec }: Card, runningSpecs: Set<number | undefined>): boolean => spec !== undefined && runningSpecs.has(spec);
+
 function kindOf(stage: Stage, card: Card, specsWithTickets: Set<number | undefined>, runningSpecs: Set<number | undefined>): Kind | undefined {
   const isTicket = card.spec !== undefined;
+  const loopRuns = loopRunsFor(card, runningSpecs);
   if (stage === "build") {
     if (!isTicket && specsWithTickets.has(card.number)) return undefined;
     switch (card.status) {
       case "parked":
+        // Only the Builder's answer is needed now; an answered Ticket waits for the running loop to end.
+        return loopRuns && card.answered ? undefined : "stuck";
       case "not-passed":
-        return "stuck";
+        return loopRuns ? undefined : "stuck";
       case "blocked":
         return "blocked";
       case "building":
@@ -44,12 +50,16 @@ function kindOf(stage: Stage, card: Card, specsWithTickets: Set<number | undefin
       case "waiting":
         return "running";
       default:
-        // The running loop reaches this Ticket by itself, and a second loop on one Spec would collide with it.
-        return isTicket && runningSpecs.has(card.spec) ? undefined : "start-loop";
+        // The running loop reaches this Ticket by itself.
+        return loopRuns ? undefined : "start-loop";
     }
   }
   return (stage === "approve" || stage === "design" || stage === "spec" || stage === "request") && !isTicket ? stage : undefined;
 }
+
+/** The Card's own action names `factory loop`, which is wrong while that Spec's loop runs. */
+const answerBeforeLoopEnds = ({ number }: Card): string =>
+  `Answer in a comment on Ticket #${number}. The running Ticket loop has to finish first, so do not start it again now; once it has finished, run factory next.`;
 
 /** The one action for a board: the first of `ORDER` that any card asks for, lowest number first. */
 export function nextStep(board: Board): NextStep {
@@ -64,7 +74,8 @@ export function nextStep(board: Board): NextStep {
     const [first] = actionable.filter((candidate) => candidate.kind === kind).sort((a, b) => a.card.number - b.card.number);
     if (!first) continue;
     const skill = SKILLS[kind];
-    return { action: first.card.nextAction, ...(skill ? { skill } : {}), issue: first.card.number };
+    const answerWhileRunning = kind === "stuck" && loopRunsFor(first.card, runningSpecs);
+    return { action: answerWhileRunning ? answerBeforeLoopEnds(first.card) : first.card.nextAction, ...(skill ? { skill } : {}), issue: first.card.number };
   }
   const [stray] = board.withoutStage;
   if (stray) {
