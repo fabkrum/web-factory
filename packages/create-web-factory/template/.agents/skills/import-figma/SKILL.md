@@ -20,7 +20,7 @@ Ask for the link to the Figma page or frame. Empty the folder `.factory/design-i
 - `metadata.xml`: the answer of `get_metadata`, unchanged. Its outermost frames become the Site's routes, so a frame named Home or Landing becomes `/`.
 - `<id>.png`: the answer of `get_screenshot` for each of those frames, where `<id>` is the frame's id with `:` written as `-`, so `1:2` is `1-2.png`.
 - `<id>.txt`: the code `get_design_context` gives for that frame, under the same id.
-- `assets/`: images the design uses, only if the Builder may use them.
+- `assets/`: images, fonts and video the design uses, only if the Builder may use them. The import leaves out anything else in this folder.
 
 Your Agent CLI may show you a screenshot without being able to save it as a file. Then ask the Builder for one step, explained: select the frame in Figma, choose PNG under Export in the right panel, and save it in that folder under the name you give them. Tell them they should see the file there afterwards.
 
