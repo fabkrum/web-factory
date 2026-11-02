@@ -1,5 +1,5 @@
 import { isStageLabel, stageLabel, STAGES, type Stage } from "../../src/stages.ts";
-import { NotLoggedInError, type Issue, type IssueEvent, type PullRequest, type Tracker } from "../../src/tracker.ts";
+import { NotLoggedInError, type Issue, type IssueEvent, type OpenIssue, type PullRequest, type Tracker } from "../../src/tracker.ts";
 
 export interface FakeIssue extends Issue {
   parent?: number;
@@ -122,6 +122,19 @@ export class FakeTracker implements Tracker {
     return this.#copy(this.issue(number));
   }
 
+  async openIssues(): Promise<OpenIssue[]> {
+    this.#needsLogin();
+    return [...this.#issues.values()]
+      .filter((issue) => issue.state === "open")
+      .map(({ number, title, labels, parent }) => ({
+        number,
+        title,
+        labels: [...labels],
+        url: `https://github.example.test/site/issues/${number}`,
+        ...(parent === undefined ? {} : { parent }),
+      }));
+  }
+
   async pullRequestFrom(head: string): Promise<PullRequest | undefined> {
     const found = this.pullRequests.find((pr) => pr.head === head && pr.state === "open");
     return found && { number: found.number, url: found.url };
@@ -183,6 +196,7 @@ export function delegateTo(tracker: Tracker): Tracker {
     labels: () => tracker.labels(),
     ticketsOf: (spec) => tracker.ticketsOf(spec),
     getIssue: (issue) => tracker.getIssue(issue),
+    openIssues: () => tracker.openIssues(),
     historyOf: (issue) => tracker.historyOf(issue),
     comment: (issue, body) => tracker.comment(issue, body),
     close: (issue) => tracker.close(issue),

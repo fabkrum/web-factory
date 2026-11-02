@@ -11,6 +11,17 @@ export interface Issue {
   blockedBy: number[];
 }
 
+/** An open Request, Spec or Ticket, as the board lists it. */
+export interface OpenIssue {
+  number: number;
+  title: string;
+  labels: string[];
+  /** Where the Builder reads and answers it. */
+  url: string;
+  /** For a Ticket: the number of its Spec. */
+  parent?: number;
+}
+
 /** One thing that happened on an issue: a comment, a close or a reopen. */
 export type IssueEvent = { kind: "comment"; body: string } | { kind: "closed" } | { kind: "reopened" };
 
@@ -46,6 +57,8 @@ export interface Tracker {
   ticketsOf(spec: number): Promise<Issue[]>;
   /** Any issue by its number, such as a Spec or a blocker outside the Spec. */
   getIssue(issue: number): Promise<Issue>;
+  /** Every open issue of the repository, pull requests left out. */
+  openIssues(): Promise<OpenIssue[]>;
   /** What happened on an issue, oldest first (on GitHub, its timeline). */
   historyOf(issue: number): Promise<IssueEvent[]>;
   comment(issue: number, body: string): Promise<void>;

@@ -148,6 +148,16 @@ export class FakeGitHub {
       return this.#issueJson(issue);
     }
 
+    if (route === "GET issues") {
+      const state = query.get("state") ?? "open";
+      // Like GitHub, the list holds pull requests too.
+      const issues = [...this.#issues.values()].filter((issue) => state === "all" || issue.state === state).map((issue) => this.#issueJson(issue));
+      const pulls = [...this.#pulls.values()]
+        .filter((pull) => state === "all" || pull.state === state)
+        .map((pull) => ({ id: this.#nextId++, number: pull.number, title: pull.title, body: pull.body, state: pull.state, labels: [], pull_request: {} }));
+      return [...issues, ...pulls];
+    }
+
     if ((match = route.match(/^GET issues\/(\d+)$/))) {
       const number = Number(match[1]);
       const pull = this.#pulls.get(number);
@@ -254,6 +264,7 @@ export class FakeGitHub {
   }
 
   #issueJson(issue: StoredIssue): Record<string, unknown> {
+    const parent = [...this.#issues.values()].find((candidate) => candidate.subIssues.includes(issue.number));
     return {
       id: issue.id,
       number: issue.number,
@@ -262,6 +273,7 @@ export class FakeGitHub {
       state: issue.state,
       labels: issue.labels.map((name) => ({ name })),
       html_url: `https://github.test/${this.repo}/issues/${issue.number}`,
+      parent_issue_url: parent ? `https://api.github.test/repos/${this.repo}/issues/${parent.number}` : null,
     };
   }
 

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { DECISION_STAGES, isStageLabel, stageLabel, STAGES, type Stage } from "./stages.ts";
-import { NotLoggedInError, type Issue, type IssueEvent, type PullRequest, type Tracker } from "./tracker.ts";
+import { NotLoggedInError, type Issue, type IssueEvent, type OpenIssue, type PullRequest, type Tracker } from "./tracker.ts";
 
 /** Runs the GitHub CLI with these arguments and returns what it printed. */
 export type Gh = (args: string[], options: { cwd: string; input?: string }) => Promise<string>;
@@ -36,6 +36,8 @@ interface GitHubIssue {
   state: "open" | "closed";
   labels: (string | { name: string })[];
   pull_request?: unknown;
+  html_url?: string;
+  parent_issue_url?: string | null;
 }
 
 interface GitHubPullRequest {
@@ -129,6 +131,23 @@ export class GitHubTracker implements Tracker {
 
   async getIssue(issue: number): Promise<Issue> {
     return this.#toIssue(await this.#issue(issue));
+  }
+
+  async openIssues(): Promise<OpenIssue[]> {
+    const issues = (await this.#list("issues?state=open")) as GitHubIssue[];
+    // GitHub lists pull requests as issues too; one list call, so the board stays cheap to reload.
+    return issues
+      .filter((issue) => issue.pull_request === undefined)
+      .map((issue) => {
+        const parent = /\/issues\/(\d+)$/.exec(issue.parent_issue_url ?? "")?.[1];
+        return {
+          number: issue.number,
+          title: issue.title,
+          labels: labelNames(issue),
+          url: issue.html_url ?? "",
+          ...(parent === undefined ? {} : { parent: Number(parent) }),
+        };
+      });
   }
 
   async historyOf(issue: number): Promise<IssueEvent[]> {

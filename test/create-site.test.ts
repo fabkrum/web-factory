@@ -77,7 +77,8 @@ describe("npm create web-factory", () => {
     });
 
     it("pins the Factory and leaves a working factory command", () => {
-      const manifest = JSON.parse(read(site, "package.json")) as { name: string; devDependencies: Record<string, string> };
+      const manifest = JSON.parse(read(site, "package.json")) as { name: string; scripts: Record<string, string>; devDependencies: Record<string, string> };
+      expect(manifest.scripts.board).toBe("factory board");
       expect(manifest.name).toBe("my-site");
       expect(manifest.devDependencies["@fabkrum/web-factory"]).toBe(FACTORY_VERSION);
       const lock = JSON.parse(read(site, "package-lock.json")) as { packages: Record<string, { version: string }> };

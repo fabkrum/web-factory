@@ -6,6 +6,7 @@ import { CONFIG_FILE, ConfigError, readSiteConfig } from "./config.ts";
 import { ReviewError } from "./review/check.ts";
 import { couldNotRun, formatReport } from "./review/report.ts";
 import { REVIEW_CHECKS, runReview } from "./review/review.ts";
+import { BoardError, boardAddress, readBoard, serveBoard } from "./board.ts";
 import { approveDesign, runDesign } from "./design.ts";
 import { IMPORT_TOOLS, runDesignImport, type ImportTool } from "./design-import.ts";
 import { KickoffError, runKickoff } from "./kickoff.ts";
@@ -27,9 +28,18 @@ export interface FactoryDeps {
   clock?: Clock;
   /** Runs the Review checks on a Ticket's served build: every one of them, unless a test says otherwise. */
   reviewSite?: ReviewSite;
+  /** Opens an address in the Builder's browser; missing, the Builder opens the printed address. */
+  openBrowser?: (url: string) => void;
+  /** Ends `factory board`; without it the board runs until the Builder stops the command. */
+  stop?: AbortSignal;
+  /** The environment, which tells whether this is a Codespace. */
+  env?: NodeJS.ProcessEnv;
   stdout: (text: string) => void;
   stderr: (text: string) => void;
 }
+
+/** Where the board opens unless the Builder says otherwise; fixed, so a forwarded port stays the same. */
+const BOARD_PORT = 4400;
 
 export const USAGE = `Usage:
   factory kickoff <decisions-file>
@@ -53,6 +63,11 @@ export const USAGE = `Usage:
                                   came from, such as its address; claude-design can do without
   factory design approve <spec>   The Builder approved the Design: its Tickets move to Build
   factory loop <spec>             Build the open Tickets of Spec number <spec>, unattended
+  factory board [--json] [--port <port>]
+                                  Open the board: every open Request and Ticket in its
+                                  Stage, why anything is stuck, and the one next action.
+                                  It runs until you stop it with Ctrl+C. --json prints
+                                  the board's data once instead
   factory review <url> [--json] [--check <id>]
                                   Run every Review check on the Site served at <url>,
                                   or only the ones named with --check
@@ -91,6 +106,7 @@ export async function factory(argv: string[], deps: FactoryDeps): Promise<number
   if (command === "request") return request(args, deps);
   if (command === "spec") return spec(args, deps);
   if (command === "design") return design(args, deps);
+  if (command === "board") return board(args, deps);
   if (command !== "loop") {
     deps.stderr(`factory does not know the command "${command}".\n\n${USAGE}`);
     return 2;
@@ -172,13 +188,45 @@ async function onTracker(deps: FactoryDeps, step: (tracker: Tracker) => Promise<
       deps.stderr(`${LOGIN_NEEDED}\n`);
       return 1;
     }
-    if (error instanceof PipelineError || error instanceof ConfigError || error instanceof ReviewError) {
+    if (error instanceof PipelineError || error instanceof ConfigError || error instanceof ReviewError || error instanceof BoardError) {
       deps.stderr(`${error.message}\n`);
       return 1;
     }
     deps.stderr(`GitHub could not be reached, so this step is not finished: ${(error as Error).message}\nFix that, then run this same command again.\n`);
     return 1;
   }
+}
+
+async function board(args: string[], deps: FactoryDeps): Promise<number> {
+  const json = args.includes("--json");
+  const rest = args.filter((arg) => arg !== "--json");
+  const port = rest.length === 0 ? BOARD_PORT : rest.length === 2 && rest[0] === "--port" && /^\d+$/.test(rest[1]!) ? Number(rest[1]) : undefined;
+  if (port === undefined || port > 65535) {
+    deps.stderr(`factory board takes only --json and --port with a port number, for example: factory board --port 4401\n\n${USAGE}`);
+    return 2;
+  }
+  const clock = deps.clock ?? systemClock;
+  return onTracker(deps, async (tracker) => {
+    const read = () => readBoard({ siteDir: deps.cwd, tracker, clock });
+    // Read once first, so a missing login is said here and not only on the page.
+    const first = await read();
+    if (json) {
+      deps.stdout(`${JSON.stringify(first, null, 2)}\n`);
+      return;
+    }
+    const env = deps.env ?? process.env;
+    await serveBoard({
+      read,
+      port,
+      now: () => clock.now(),
+      stop: deps.stop,
+      opened: (actualPort) => {
+        const { url, codespace } = boardAddress(actualPort, env);
+        deps.stdout(`The board is open at ${url}\nIt stays open until you press Ctrl+C here.\n`);
+        if (!codespace) deps.openBrowser?.(url);
+      },
+    });
+  });
 }
 
 async function kickoff(args: string[], deps: FactoryDeps): Promise<number> {

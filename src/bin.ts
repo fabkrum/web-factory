@@ -1,5 +1,6 @@
 import type { AgentCli } from "./agent-cli.ts";
 import { ClaudeCode } from "./claude-code.ts";
+import { openInBrowser } from "./board.ts";
 import { factory } from "./cli.ts";
 import { Codex } from "./codex.ts";
 import { ConfigError, readAgentCliChoice, type AgentCliName } from "./config.ts";
@@ -27,6 +28,7 @@ process.exitCode = await factory(process.argv.slice(2), {
   cwd: process.cwd(),
   agentCli,
   tracker: new GitHubTracker({ cwd: process.cwd() }),
+  openBrowser: openInBrowser,
   stdout: (text) => process.stdout.write(text),
   stderr: (text) => process.stderr.write(text),
 });

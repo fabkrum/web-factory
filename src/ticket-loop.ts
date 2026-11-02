@@ -5,7 +5,7 @@ import { clearCodeReview, codeReviewComment, codeReviewPrompt, isCodeReviewComme
 import type { SiteConfig } from "./config.ts";
 import { runGate } from "./gate.ts";
 import { branchExists, git, gitSucceeds, worktreeOf } from "./git.ts";
-import { recordTicketState, type TicketState } from "./loop-state.ts";
+import { LOCAL_DIR, recordTicketState, type TicketState } from "./loop-state.ts";
 import { couldNotRun, formatFailures } from "./review/report.ts";
 import type { ReviewReport } from "./review/review.ts";
 import { ServeError, withServedBuild } from "./served-build.ts";
@@ -14,9 +14,6 @@ import type { AgentCli } from "./agent-cli.ts";
 import type { Clock } from "./clock.ts";
 import type { Host } from "./host.ts";
 import type { Issue, IssueEvent, PullRequest, Tracker } from "./tracker.ts";
-
-/** Local, uncommitted Factory state in the Site repository: worktrees and the loop's state per Spec. */
-const LOCAL_DIR = ".factory";
 
 /** Runs the Review checks on the Site served at `url`, whose repository is `repo`. */
 export type ReviewSite = (url: URL, repo: string) => Promise<ReviewReport>;
@@ -271,6 +268,7 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
   // Every fix round works in the same worktree, so it sees what the attempt before left.
   const worktree = await openWorktree(siteDir, ticket.number, integration);
   let reason = "";
+  let failingChecks: string[] | undefined;
   for (let attempt = 1; attempt <= config.maxAttempts; attempt++) {
     const catchUp = await catchUpWith(worktree, integration);
     const base = await git(siteDir, "rev-parse", integration);
@@ -279,7 +277,7 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
         ? `Ticket #${ticket.number}: building on ${branch} in ${relative(siteDir, worktree)}`
         : `Ticket #${ticket.number}: fix round ${attempt - 1}, back to Build with the failing reason`,
     );
-    await record(options, ticket, { status: "building", attempts: attempt });
+    await record(options, ticket, { status: "building", attempts: attempt, reason: reason || undefined, failingChecks });
 
     const session = await agentCli.runSession({
       cwd: worktree,
@@ -299,7 +297,7 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
     }
     if (session.kind === "rate-limited") {
       // Hitting the plan's limit is not the Ticket's failure: wait it out and resume the same attempt.
-      await waitOutRateLimit(ticket, options, attempt, session.until);
+      await waitOutRateLimit(ticket, options, attempt, session.until, failingChecks);
       attempt--;
       continue;
     }
@@ -309,7 +307,7 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
         ? { passed: false as const, reason: `The Build session failed: ${session.reason}` }
         : await runGate(worktree, base, branch, integration, config.testCommand);
     if (gate.passed) {
-      await record(options, ticket, { status: "reviewing", attempts: attempt });
+      await record(options, ticket, { status: "reviewing", attempts: attempt, reason: reason || undefined, failingChecks });
       const review = await reviewTicket(ticket, options, worktree, base, gate.head, attempt);
       if ("question" in review) {
         return park(ticket, options, attempt, `The code review needs a decision from you: ${review.question}`, [
@@ -329,11 +327,14 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
           return "passed";
         }
         reason = refused;
+        failingChecks = undefined;
       } else {
         reason = review.failed;
+        failingChecks = review.failingChecks;
       }
     } else {
       reason = gate.reason;
+      failingChecks = undefined;
     }
     log(`Ticket #${ticket.number}: not passed. ${firstLine(reason)}`);
     previous = `Your last attempt did not pass: ${reason}\n\nFix exactly that.`;
@@ -346,10 +347,10 @@ async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome
     "",
     `The work so far stays on \`${branch}\` in \`${relative(siteDir, worktree)}\`. ` +
       "Say in a comment on this Ticket what should change, then run the Ticket loop again.",
-  ]);
+  ], failingChecks);
 }
 
-type ReviewOutcome = { failed?: string } | { question: string };
+type ReviewOutcome = { failed?: string; failingChecks?: string[] } | { question: string };
 
 /**
  * A Ticket's Review of the commit its gate tested: the Review checks on its served build,
@@ -359,20 +360,22 @@ type ReviewOutcome = { failed?: string } | { question: string };
 async function reviewTicket(ticket: Issue, options: LoopOptions, worktree: string, base: string, head: string, attempt: number): Promise<ReviewOutcome> {
   try {
     const failed = await runReviewChecks(options, worktree);
-    if (failed !== undefined) return { failed };
+    if (failed !== undefined) return failed;
     return await runCodeReview(ticket, options, worktree, base, head, attempt);
   } finally {
     await restoreWorktree(worktree, ticketBranch(ticket.number), head);
   }
 }
 
-/** Why the Ticket's served build failed its Review checks, or undefined when it passed them. */
-async function runReviewChecks({ config, reviewSite }: LoopOptions, worktree: string): Promise<string | undefined> {
+/** Why the Ticket's served build failed its Review checks and which ones, or undefined when it passed them. */
+async function runReviewChecks({ config, reviewSite }: LoopOptions, worktree: string): Promise<{ failed: string; failingChecks?: string[] } | undefined> {
   try {
     const report = await withServedBuild(worktree, config, (url) => reviewSite(url, worktree));
-    return report.passed ? undefined : formatFailures(report);
+    if (report.passed) return undefined;
+    const failing = report.areas.flatMap((area) => area.checks).filter((check) => !check.passed);
+    return { failed: formatFailures(report), failingChecks: failing.map((check) => check.name) };
   } catch (error) {
-    return error instanceof ServeError ? error.message : couldNotRun(error);
+    return { failed: error instanceof ServeError ? error.message : couldNotRun(error) };
   }
 }
 
@@ -411,22 +414,22 @@ async function restoreWorktree(worktree: string, branch: string, head: string): 
 }
 
 /** Sleeps until the Agent CLI's rate limit lifts, showing the Ticket as waiting on the board meanwhile. */
-async function waitOutRateLimit(ticket: Issue, options: LoopOptions, attempt: number, until: Date): Promise<void> {
+async function waitOutRateLimit(ticket: Issue, options: LoopOptions, attempt: number, until: Date, failingChecks?: string[]): Promise<void> {
   const { clock, log } = options;
   const ms = Math.max(until.getTime() - clock.now().getTime(), MIN_RATE_LIMIT_WAIT_MS);
   const resume = new Date(clock.now().getTime() + ms);
   const reason = `The Agent CLI hit its plan's rate limit, so the Ticket loop waits until ${resume.toISOString()} and then resumes this Ticket.`;
   log(`Ticket #${ticket.number}: ${reason}`);
-  await record(options, ticket, { status: "waiting", attempts: attempt, reason });
+  await record(options, ticket, { status: "waiting", attempts: attempt, reason, resumeAt: resume.toISOString(), failingChecks });
   await clock.sleep(ms);
   log(`Ticket #${ticket.number}: the rate limit has lifted, resuming`);
 }
 
 /** Leaves the Ticket open in its Stage, says why on it, and marks it parked for the board. */
-async function park(ticket: Issue, options: LoopOptions, attempts: number, reason: string, comment: string[]): Promise<Outcome> {
+async function park(ticket: Issue, options: LoopOptions, attempts: number, reason: string, comment: string[], failingChecks?: string[]): Promise<Outcome> {
   options.log(`Ticket #${ticket.number}: parked. ${firstLine(reason)}`);
   await options.tracker.comment(ticket.number, `${PARKED} ${comment.join("\n")}`);
-  await record(options, ticket, { status: "parked", attempts, reason });
+  await record(options, ticket, { status: "parked", attempts, reason, failingChecks });
   return "parked";
 }
 
@@ -437,7 +440,7 @@ async function record(options: LoopOptions, ticket: Issue, state: TicketState): 
 const PARKED = "Parked.";
 
 /** The park comment, when it is the last thing that happened on the Ticket. */
-function stillParked(history: IssueEvent[]): string | undefined {
+export function stillParked(history: IssueEvent[]): string | undefined {
   const last = history.at(-1);
   return last?.kind === "comment" && last.body.startsWith(PARKED) ? last.body.slice(PARKED.length).trim() : undefined;
 }

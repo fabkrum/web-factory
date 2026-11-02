@@ -149,6 +149,27 @@ export function trackerContract(
       expect(await tracker.pullRequestFrom(`loop/never-pushed-${run}`)).toBeUndefined();
     });
 
+    it("lists the open issues with each Ticket's Spec, without closed ones or pull requests", async () => {
+      const { tracker, pushBranch } = await subject();
+      const spec = await tracker.createIssue({ title: `Listed Spec ${run}`, body: "", stage: "build" });
+      const ticket = await tracker.createIssue({ title: `Listed Ticket ${run}`, body: "", stage: "build", parent: spec });
+      const closed = await tracker.createIssue({ title: `Listed closed ${run}`, body: "", stage: "request" });
+      const later = await tracker.createIssue({ title: `Listed later ${run}`, body: "", stage: "request" });
+      await tracker.close(closed);
+      const head = `loop/listed-${run}`;
+      const base = await pushBranch(head);
+      const pull = await tracker.openPullRequest({ head, base, title: `Listed pull ${run}`, body: "" });
+
+      const open = await tracker.openIssues();
+      const numbers = open.map((issue) => issue.number);
+
+      expect(numbers).toEqual(expect.arrayContaining([spec, ticket, later]));
+      expect(numbers).not.toContain(closed);
+      expect(numbers).not.toContain(pull.number);
+      expect(open.find((issue) => issue.number === ticket)).toMatchObject({ title: `Listed Ticket ${run}`, labels: ["stage:build"], parent: spec, url: expect.stringMatching(new RegExp(`/issues/${ticket}$`)) });
+      expect(open.find((issue) => issue.number === spec)?.parent).toBeUndefined();
+    });
+
     it("refuses an issue it does not have", async () => {
       const { tracker } = await subject();
       await expect(tracker.getIssue(987_654_321)).rejects.toThrow();

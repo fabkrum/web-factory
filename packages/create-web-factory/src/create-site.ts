@@ -129,7 +129,7 @@ async function addMissingFiles(site: string): Promise<string[]> {
 /** The Site's package.json. The Factory is pinned to exactly this package's version: the two are released together. */
 async function siteManifest(site: string): Promise<string> {
   const { version } = JSON.parse(await readFile(join(PACKAGE_ROOT, "package.json"), "utf8")) as { version: string };
-  const manifest = { name: packageName(site), private: true, devDependencies: { [FACTORY_PACKAGE]: version } };
+  const manifest = { name: packageName(site), private: true, scripts: { board: "factory board" }, devDependencies: { [FACTORY_PACKAGE]: version } };
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
