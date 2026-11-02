@@ -173,6 +173,51 @@ describe("the Run report after a run", () => {
     expect(shown?.details).toContain(`pull request #${pullRequest.number}`);
   });
 
+  it("says the run built nothing when it stopped before its first Ticket, not that no Ticket is left", async () => {
+    const site = createSiteRepo({ testCommand: "true" });
+    const fake = new FakeTracker();
+    const spec = fake.addSpec("A greeting page");
+    fake.addTicket(spec, "Say hello");
+    fake.addTicket(spec, "Say goodbye");
+    const down: Tracker = {
+      ...delegateTo(fake),
+      historyOf: async () => {
+        throw new Error("GitHub is down");
+      },
+    };
+
+    await expect(runFactory(["loop", String(spec)], { cwd: site, agentCli: new FakeAgentCli(), tracker: down })).rejects.toThrow("GitHub is down");
+
+    const report = (await stored(site)).at(-1);
+    expect(report).toMatchObject({ tickets: [], stopped: "GitHub is down" });
+    expect(fake.issue(spec).comments.at(-1)).toContain("Run report of the Ticket loop. The run stopped before it built any Ticket.");
+    expect(fake.issue(spec).comments.at(-1)).toContain("stopped before it was through: GitHub is down");
+    expect(fake.issue(spec).comments.at(-1)).not.toContain("No Ticket left to build");
+    const [shown] = (await boardOf(site, fake)).runReports;
+    expect(shown?.summary).toBe("The run stopped before it built any Ticket.");
+  });
+
+  it("says the same when the run that repairs the pull request stops too", async () => {
+    const site = createSiteRepo({ testCommand: "true" });
+    const fake = new FakeTracker();
+    const spec = fake.addSpec("A greeting page");
+    fake.addTicket(spec, "Say hello");
+    const prFails: Tracker = {
+      ...delegateTo(fake),
+      openPullRequest: async () => {
+        throw new Error("GitHub is down");
+      },
+    };
+    const host = new FakeHost();
+    await expect(runFactory(["loop", String(spec)], { cwd: site, agentCli: new FakeAgentCli(builds("hello.txt")), tracker: prFails, host })).rejects.toThrow("GitHub is down");
+
+    await expect(runFactory(["loop", String(spec)], { cwd: site, agentCli: new FakeAgentCli(), tracker: prFails, host })).rejects.toThrow("GitHub is down");
+
+    expect((await stored(site)).at(-1)).toMatchObject({ run: 2, tickets: [], stopped: "GitHub is down" });
+    expect(fake.issue(spec).comments.at(-1)).toContain("The run stopped before it built any Ticket.");
+    expect(fake.issue(spec).comments.at(-1)).not.toContain("No Ticket left to build");
+  });
+
   it("reports a Ticket that is still parked, and one waiting for it, without counting an attempt", async () => {
     const site = createSiteRepo({ testCommand: "true" });
     const tracker = new FakeTracker();

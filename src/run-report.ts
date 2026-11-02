@@ -199,7 +199,8 @@ const label = ({ ticket, title }: TicketRun) => `#${ticket} ${title}`;
 /** The run in one line, the way the board lists it. */
 export function runSummary(report: FinishedRun): string {
   const { tickets } = report;
-  if (tickets.length === 0) return "No Ticket left to build.";
+  // A run with no Ticket either found none left, as the run that repairs the pull request does, or stopped first.
+  if (tickets.length === 0) return report.stopped === undefined ? "No Ticket left to build." : "The run stopped before it built any Ticket.";
   const of = (outcome: TicketOutcome) => tickets.filter((ticket) => ticket.outcome === outcome).length;
   const straight = tickets.filter(isStraightThrough).length;
   const parts = [
