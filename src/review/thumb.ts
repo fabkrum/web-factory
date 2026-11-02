@@ -1,5 +1,5 @@
 import type { BrowserContext, ElementHandle, JSHandle, Page, Request } from "playwright";
-import { goTo, movedOn, PageError, settled } from "./browser.ts";
+import { goTo, movedOn, PageError, settled, whileHere } from "./browser.ts";
 import type { Failure, ReviewCheck, Route } from "./check.ts";
 
 /** A phone Visitor's screen: touch, and the page laid out by its own viewport tag. */
@@ -14,6 +14,9 @@ const OPEN_QUIET = 300;
 
 /** How long a tap gets to reach anything, and how often a moving target is measured until it holds still. */
 const TAP_TIMEOUT = 2_000;
+/** How much longer than that a tap's answer may take to come back, and how long any other read of the page may: past that the page is on its way elsewhere. */
+const ANSWER_MARGIN = 1_000;
+const READ_TIMEOUT = 5_000;
 const MEASURES = 40;
 const MEASURE_EVERY = 50;
 
@@ -28,7 +31,8 @@ const MOVED_ON =
  * on every route, because what lets a tap through can sit on one page only. The
  * tap is stopped as it arrives, so the review reads which element it reached and
  * an item's address, dead or external, does not matter. A page can still leave on
- * the touch itself, before the tap arrives; the next item then gets a new page.
+ * the touch itself, before the tap arrives; the next item then gets a new page,
+ * and no read waits for the page it left for, which may never answer.
  */
 export const thumbCheck: ReviewCheck = {
   id: "accessibility/thumb-test",
@@ -146,7 +150,10 @@ async function openAt(context: BrowserContext, route: Route, place: number): Pro
 async function stillOpen(menu: Menu, place: number): Promise<boolean> {
   try {
     const { links } = await scan(menu.page, menu.closed);
-    return await menu.page.evaluate(({ links, item }) => links.includes(item as Element), { links, item: menu.items[place] });
+    return await whileHere(
+      menu.page.evaluate(({ links, item }) => links.includes(item as Element), { links, item: menu.items[place] }),
+      READ_TIMEOUT,
+    );
   } catch (error) {
     if (movedOn(error)) return false;
     throw error;
@@ -195,7 +202,7 @@ async function tapItem(page: Page, item: Control): Promise<{ failure?: { name: s
     };
   }
   // Wrapped in an object so that this returns once the listener is in place, not when the tap arrives.
-  const listening = await item.evaluateHandle(
+  const listen = item.evaluateHandle(
     (element, { x, y, timeout }) => {
       const landing = (target: Element): Landing => {
         const tag = target.outerHTML.slice(0, target.outerHTML.indexOf(">") + 1);
@@ -220,8 +227,12 @@ async function tapItem(page: Page, item: Control): Promise<{ failure?: { name: s
     },
     { x, y, timeout: TAP_TIMEOUT },
   );
+  const listening = await whileHere(listen, READ_TIMEOUT);
   // Asked before the touch: a page that leaves on the touch takes the answer of the click with it.
-  const aimed = await listening.evaluate((waiting) => waiting.aimed);
+  const aimed = await whileHere(
+    listening.evaluate((waiting) => waiting.aimed),
+    READ_TIMEOUT,
+  );
   let setOff = false;
   const onRequest = (request: Request) => {
     setOff ||= sendsOff(page, request);
@@ -257,7 +268,10 @@ function sendsOff(page: Page, request: Request): boolean {
 async function tapped(page: Page, x: number, y: number, listening: JSHandle<{ tap: Promise<Landing | null> }>): Promise<Landing | null | "left"> {
   try {
     await page.touchscreen.tap(x, y);
-    return await listening.evaluate((waiting) => waiting.tap);
+    return await whileHere(
+      listening.evaluate((waiting) => waiting.tap),
+      TAP_TIMEOUT + ANSWER_MARGIN,
+    );
   } catch (error) {
     if (movedOn(error)) return "left";
     throw error;
@@ -272,10 +286,13 @@ interface Landing {
 
 /** What a Builder calls this control or link. */
 function nameOf(target: Control): Promise<string> {
-  return target.evaluate((element) => (element.textContent?.trim() || element.getAttribute("aria-label") || element.getAttribute("href") || element.tagName.toLowerCase()).slice(0, 60));
+  return whileHere(
+    target.evaluate((element) => (element.textContent?.trim() || element.getAttribute("aria-label") || element.getAttribute("href") || element.tagName.toLowerCase()).slice(0, 60)),
+    READ_TIMEOUT,
+  );
 }
 
-/** Where to touch the target once it holds its place and nothing animates it any more, after scrolling it into view. */
+/** Where to touch the target once it holds its place and nothing animates it any more, after scrolling it into view if it is not in view. */
 async function holdStill(page: Page, target: Control): Promise<Spot> {
   let last = await spot(target);
   for (let measure = 0; measure < MEASURES; measure++) {
@@ -288,19 +305,28 @@ async function holdStill(page: Page, target: Control): Promise<Spot> {
 }
 
 function spot(target: Control): Promise<Spot> {
-  return target.evaluate((element) => {
-    element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
-    // A link wrapping a block starts with an empty line box.
-    const box = [...element.getClientRects()].find((rect) => rect.width > 0 && rect.height > 0) ?? element.getBoundingClientRect();
-    const x = box.left + box.width / 2;
-    const y = box.top + box.height / 2;
-    // An animation that never ends is decoration: waiting for it would only use up the time.
-    const moving = document.getAnimations().some((animation) => {
-      const effect = animation.effect as KeyframeEffect | null;
-      return animation.playState === "running" && effect?.target?.contains(element) === true && effect.getTiming().iterations !== Infinity;
-    });
-    return { x, y, onScreen: x >= 0 && x < window.innerWidth && y >= 0 && y < window.innerHeight, moving };
-  });
+  return whileHere(
+    target.evaluate((element) => {
+      // A link wrapping a block starts with an empty line box.
+      const place = () => [...element.getClientRects()].find((rect) => rect.width > 0 && rect.height > 0) ?? element.getBoundingClientRect();
+      // "nearest" leaves what is in view alone, and a page may close its menu on any scroll. What did need moving goes to the middle, clear of a sticky header.
+      const { top, left } = place();
+      element.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+      if (place().top !== top || place().left !== left) element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+      const box = place();
+      const x = box.left + box.width / 2;
+      const y = box.top + box.height / 2;
+      // An animation that never ends is decoration: waiting for it would only use up the time.
+      const moving = document.getAnimations().some((animation) => {
+        const effect = animation.effect as KeyframeEffect | null;
+        return animation.playState === "running" && effect?.target?.contains(element) === true && effect.getTiming().iterations !== Infinity;
+      });
+      // An empty box is an item the scroll closed away: there is nothing to touch at (0, 0).
+      const shown = box.width > 0 && box.height > 0;
+      return { x, y, onScreen: shown && x >= 0 && x < window.innerWidth && y >= 0 && y < window.innerHeight, moving };
+    }),
+    READ_TIMEOUT,
+  );
 }
 
 interface Spot {
@@ -344,7 +370,11 @@ interface Scan {
  * the fold of a scrolling list is as far in sight as the list, which shows it on a
  * scroll, so it is tapped like the rest.
  */
-async function scan(page: Page, before?: Sights): Promise<Scan> {
+function scan(page: Page, before?: Sights): Promise<Scan> {
+  return whileHere(readPage(page, before), READ_TIMEOUT);
+}
+
+async function readPage(page: Page, before?: Sights): Promise<Scan> {
   const found = await page.evaluateHandle(
     ({ selector, before }) => {
       const hides = (overflow: string) => overflow === "hidden" || overflow === "clip";

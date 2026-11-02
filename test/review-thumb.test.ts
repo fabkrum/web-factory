@@ -514,6 +514,56 @@ document.querySelector("button").addEventListener("click", () => {
     expect(thumb.failures).toEqual([]);
   });
 
+  const NEVER = { "/never": () => {} };
+
+  it("does not wait for a page that never answers when a header button goes there", async () => {
+    const page = panelPage("").replace(`<button type="button">Menu</button>`, `<header><button type="button" onclick="location.href='/never'">Sign up</button></header>`);
+    const { thumb } = await reviewPages({ "/": page, ...NEVER, ...ROUTES });
+
+    expect(thumb.notApplicable).toMatch(/no .*menu/i);
+    expect(thumb.failures).toEqual([]);
+  }, 40_000);
+
+  it("does not wait for a page that never answers when a menu item goes there on the touch", async () => {
+    const page = panelPage("").replace(`<a href="/one">`, `<a href="/one" ontouchend="location.href='/never'">`);
+    const { thumb } = await reviewPages({ "/": page, ...NEVER, ...ROUTES });
+
+    expect(thumb.notApplicable).toBeUndefined();
+    expect(thumb.failures).toEqual([]);
+  }, 40_000);
+
+  it("goes on to the next item when a tap the item took sends the page, a moment later, to one that never answers", async () => {
+    const page = panelPage("").replace(`<a href="/one">`, `<a href="/one" ontouchend="setTimeout(() => location.href = '/never', 50)">`);
+    const { thumb } = await reviewPages({ "/": page, ...NEVER, ...ROUTES });
+
+    expect(thumb.notApplicable).toBeUndefined();
+    expect(thumb.failures).toEqual([]);
+  }, 40_000);
+
+  describe("a dropdown that closes when the page scrolls", () => {
+    const dropdown = (links: string, css = "") =>
+      `<!doctype html><html lang="en"><head><meta charset="utf-8">${PHONE}<title>Menu</title>
+<style>body { margin: 0; } #panel { display: none; position: absolute; top: 3rem; left: 0; right: 0; background: #fff; z-index: 5; } #panel.open { display: block; } #panel a { display: block; padding: 1rem; } ${css}</style></head>
+<body><button type="button">Menu</button><nav id="panel">${links}</nav><div style="height: 2000px"></div>${TOGGLE_SCRIPT}
+<script>window.addEventListener("scroll", () => document.getElementById("panel").classList.remove("open"));</script></body></html>`;
+
+    it("Passes when every item is on the screen, because such an item needs no scrolling", async () => {
+      const links = [1, 2, 3, 4, 5].map((number) => `<a href="/one">Item ${number}</a>`).join("");
+      const { thumb } = await reviewPages({ "/": dropdown(links), ...ROUTES });
+
+      expect(thumb.notApplicable).toBeUndefined();
+      expect(thumb.failures).toEqual([]);
+    });
+
+    it("says an item past the screen cannot be reached, rather than tapping a corner of the page", async () => {
+      const links = `<a href="/one">Near</a><a href="/two" style="margin-top: 1200px">Far</a>`;
+      const { thumb } = await reviewPages({ "/": dropdown(links), ...ROUTES });
+
+      expect(thumb.failures.map((failure) => failure.location)).toEqual(['/ at "Far"']);
+      expect(thumb.failures[0]!.reason).toMatch(/off the screen/i);
+    });
+  });
+
   it("does not leave the page or need the item's address to answer", async () => {
     const page = panelPage("").replace(`<a href="/two">Two</a>`, `<a href="#top">Two</a><a href="https://unreachable.invalid/" target="_blank">Three</a><a href="mailto:hello@example.com">Four</a>`);
     const { thumb } = await reviewPages({ "/": page, ...ROUTES });
