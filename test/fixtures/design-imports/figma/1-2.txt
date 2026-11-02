@@ -1,0 +1,1 @@
+export default function LandingPage() { return <main className="w-full"><h1>Figma home</h1></main>; }

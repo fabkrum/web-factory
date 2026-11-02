@@ -1,7 +1,8 @@
 import { DtcgEmitterHandler, lint, type DesignSystemState, type LintReport, type ResolvedColor } from "@google/design.md/linter";
-import { access, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { access, readdir, readFile } from "node:fs/promises";
+import { join, relative } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { git } from "./git.ts";
 import type { Failure } from "./review/check.ts";
 
 /**
@@ -17,12 +18,18 @@ export const DESIGN_FILE = `${HANDOFF_FOLDER}/DESIGN.md`;
 export const TOKENS_FILE = `${HANDOFF_FOLDER}/tokens.json`;
 export const PROVENANCE_FILE = `${HANDOFF_FOLDER}/source.json`;
 export const SCREENSHOT_FOLDER = `${HANDOFF_FOLDER}/screenshots`;
+/** A design tool's own code, kept to read and never built from. */
+export const REFERENCE_FOLDER = `${HANDOFF_FOLDER}/reference`;
+/** The images and fonts a design tool's design uses; unlike its code, these may go into the Site. */
+export const ASSETS_FOLDER = `${HANDOFF_FOLDER}/assets`;
 
 /** Where a design came from and how it was made. */
 export interface Provenance {
   /** The design tool, or "none" when the model wrote the design. */
   tool: string;
   how: string;
+  /** Where an imported design was fetched from, such as its project address; a design from no tool has none. */
+  source?: string;
   /** The Spec this handoff was made for and is approved with. */
   spec: number;
   designFormat: string;
@@ -162,6 +169,9 @@ export async function readProvenance(siteDir: string): Promise<Provenance | Fail
   if (!parsed || typeof parsed.tool !== "string" || !Number.isInteger(parsed.spec) || !Array.isArray(routes) || routes.length === 0 || !routes.every((route) => typeof route === "string")) {
     return { reason: "source.json does not say which tool, Spec and routes this design comes from. Make the handoff again with factory design <spec>.", location };
   }
+  if (parsed.tool !== "none" && typeof parsed.source !== "string") {
+    return { reason: "source.json does not say where this imported design was fetched from. Import it again with factory design import.", location };
+  }
   return parsed as Provenance;
 }
 
@@ -171,6 +181,42 @@ async function screenshotFailures(siteDir: string, provenance: Provenance): Prom
     const location = screenshotFile(route);
     const there = await access(join(siteDir, location)).then(() => true, () => false);
     if (!there) failures.push({ reason: `The Design handoff has no reference screenshot of ${route}, so nothing shows what was approved for that route. Make the handoff again with factory design <spec>.`, location });
+  }
+  return failures;
+}
+
+const CODE_FILE = /\.(html?|css|m?js|jsx|ts|tsx|vue|svelte|astro)$/iu;
+/** Figma's code is kept as text, so that no Site's compiler picks it up. */
+const REFERENCE_CODE_FILE = /\.(txt|html?|css|m?js|jsx|ts|tsx|vue|svelte|astro)$/iu;
+
+/** Text that differs only in line endings or surrounding blank space is the same code. */
+const sameCode = (text: string) => text.replace(/\r\n/gu, "\n").trim();
+
+async function filesIn(folder: string): Promise<string[]> {
+  const entries = await readdir(folder, { recursive: true, withFileTypes: true }).catch(() => []);
+  return entries.filter((entry) => entry.isFile()).map((entry) => join(entry.parentPath, entry.name));
+}
+
+/**
+ * The tool's code is reference only, so the Site's own files must not be copies of it. This finds
+ * a file copied whole, and cannot see one reworked after copying. Outside git there is no telling
+ * which files are the Site's, so nothing is compared.
+ */
+async function copiedToolCode(siteDir: string): Promise<Failure[]> {
+  const reference = new Map<string, string>();
+  for (const file of await filesIn(join(siteDir, REFERENCE_FOLDER))) {
+    if (!REFERENCE_CODE_FILE.test(file)) continue;
+    const code = sameCode(await readFile(file, "utf8"));
+    if (code !== "") reference.set(code, relative(siteDir, file));
+  }
+  if (reference.size === 0) return [];
+  const listed = await git(siteDir, "ls-files", "-z", "--cached", "--others", "--exclude-standard").catch(() => "");
+  const failures: Failure[] = [];
+  for (const file of listed.split("\0")) {
+    if (!CODE_FILE.test(file) || file.startsWith(`${HANDOFF_FOLDER}/`)) continue;
+    const code = await readFile(join(siteDir, file), "utf8").catch(() => undefined);
+    const copied = code === undefined ? undefined : reference.get(sameCode(code));
+    if (copied) failures.push({ reason: `This file is a copy of ${copied}, code a design tool generated. It is reference only, because the Site is built in the stack the Builder chose: build this page from DESIGN.md instead.`, location: file });
   }
   return failures;
 }
@@ -187,7 +233,7 @@ export async function handoffFailures(siteDir: string): Promise<Failure[]> {
   const tokens = await readFile(join(siteDir, TOKENS_FILE), "utf8").catch(() => undefined);
   // A DESIGN.md of another format version cannot be read, so its tokens cannot be compared.
   const pinned = formatVersion(design) === DESIGN_FORMAT_VERSION;
-  const failures = [...lintFailures, ...(pinned ? tokensFailures(design, tokens) : [])];
+  const failures = [...lintFailures, ...(pinned ? tokensFailures(design, tokens) : []), ...(await copiedToolCode(siteDir))];
   const provenance = await readProvenance(siteDir);
   if ("reason" in provenance) return [...failures, provenance];
   return [...failures, ...(await screenshotFailures(siteDir, provenance))];

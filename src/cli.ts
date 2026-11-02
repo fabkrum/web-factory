@@ -7,6 +7,7 @@ import { ReviewError } from "./review/check.ts";
 import { couldNotRun, formatReport } from "./review/report.ts";
 import { REVIEW_CHECKS, runReview } from "./review/review.ts";
 import { approveDesign, runDesign } from "./design.ts";
+import { IMPORT_TOOLS, runDesignImport, type ImportTool } from "./design-import.ts";
 import { KickoffError, runKickoff } from "./kickoff.ts";
 import { PipelineError, runRequest } from "./request.ts";
 import { confirmCut, runSpec } from "./spec.ts";
@@ -45,6 +46,11 @@ export const USAGE = `Usage:
                                   sample page the design skill wrote: generated tokens, a
                                   reference screenshot per route and a provenance record.
                                   Run again after any change
+  factory design import <tool> <spec> [<where-it-came-from>]
+                                  Make the Design handoff from what an import skill saved in
+                                  .factory/design-import/<tool> and the DESIGN.md it wrote.
+                                  <tool> is ${IMPORT_TOOLS.join(", ")}. Say where the design
+                                  came from, such as its address; claude-design can do without
   factory design approve <spec>   The Builder approved the Design: its Tickets move to Build
   factory loop <spec>             Build the open Tickets of Spec number <spec>, unattended
   factory review <url> [--json] [--check <id>]
@@ -129,7 +135,19 @@ async function spec(args: string[], deps: FactoryDeps): Promise<number> {
   return onTracker(deps, (tracker) => runSpec({ siteDir: deps.cwd, file, tracker, stdout: deps.stdout }));
 }
 
+async function designImport(args: string[], deps: FactoryDeps): Promise<number> {
+  const [tool, specNumber, source] = args;
+  const number = issueNumber(specNumber);
+  const known = IMPORT_TOOLS.find((name) => name === tool);
+  if (!known || number === undefined || args.length > 3 || (source === undefined && known !== "claude-design")) {
+    deps.stderr(`factory design import needs the tool, the number of the Spec and where the design came from, for example: factory design import figma 12 https://www.figma.com/design/abc\n\n${USAGE}`);
+    return 2;
+  }
+  return onTracker(deps, (tracker) => runDesignImport({ siteDir: deps.cwd, tool: known satisfies ImportTool, spec: number, source, tracker, clock: deps.clock ?? systemClock, stdout: deps.stdout }));
+}
+
 async function design(args: string[], deps: FactoryDeps): Promise<number> {
+  if (args[0] === "import") return designImport(args.slice(1), deps);
   const approving = args[0] === "approve";
   const number = issueNumber(args[approving ? 1 : 0]);
   if (args.length !== (approving ? 2 : 1) || number === undefined) {

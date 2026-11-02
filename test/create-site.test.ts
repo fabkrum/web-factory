@@ -101,7 +101,7 @@ describe("npm create web-factory", () => {
     it("lets every Agent CLI find the same instructions and skills", () => {
       expect(existsSync(join(site, "AGENTS.md"))).toBe(true);
       expect(existsSync(join(site, ".agents/skills/modern-web-guidance/SKILL.md"))).toBe(true);
-      for (const skill of ["kickoff", "request", "spec", "design"]) expect(read(site, `.agents/skills/${skill}/SKILL.md`)).toMatch(new RegExp(`^---\\nname: ${skill}\\n`));
+      for (const skill of ["kickoff", "request", "spec", "design", "import-stitch", "import-figma", "import-claude-design"]) expect(read(site, `.agents/skills/${skill}/SKILL.md`)).toMatch(new RegExp(`^---\\nname: ${skill}\\n`));
       expect(read(site, "CLAUDE.md").split("\n")).toContain("@AGENTS.md");
       expect(lstatSync(join(site, ".claude/skills")).isSymbolicLink()).toBe(true);
       expect(readlinkSync(join(site, ".claude/skills"))).toBe("../.agents/skills");

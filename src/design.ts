@@ -5,7 +5,7 @@ import { extname, join, normalize } from "node:path";
 import type { Clock } from "./clock.ts";
 import { readSiteConfig } from "./config.ts";
 import { commitRecord } from "./decision-record.ts";
-import { DESIGN_FILE, DESIGN_FORMAT_VERSION, generateTokens, handoffFailures, HANDOFF_FOLDER, lintDesign, PROVENANCE_FILE, readProvenance, SCREENSHOT_FOLDER, screenshotFile, serialiseTokens, TOKENS_FILE, type Provenance } from "./design-handoff.ts";
+import { ASSETS_FOLDER, DESIGN_FILE, DESIGN_FORMAT_VERSION, generateTokens, handoffFailures, HANDOFF_FOLDER, lintDesign, PROVENANCE_FILE, readProvenance, REFERENCE_FOLDER, SCREENSHOT_FOLDER, screenshotFile, serialiseTokens, TOKENS_FILE, type Provenance } from "./design-handoff.ts";
 import { git, gitSucceeds } from "./git.ts";
 import { PipelineError } from "./request.ts";
 import { goTo, launchBrowser, openReviewPage, PageError } from "./review/browser.ts";
@@ -15,7 +15,7 @@ import { stageLabel, type Stage } from "./stages.ts";
 import type { Issue, Tracker } from "./tracker.ts";
 
 /** The pages that show the design, served only here: they are reference and never part of the Site. */
-const SAMPLE_FOLDER = `${HANDOFF_FOLDER}/sample`;
+export const SAMPLE_FOLDER = `${HANDOFF_FOLDER}/sample`;
 
 /** The size of the window a reference screenshot is taken in. */
 const VIEWPORT = { width: 1280, height: 800 };
@@ -33,18 +33,18 @@ const TYPES: Record<string, string> = {
 
 const WHAT_APPROVAL_MEANS = "Approving says: this design is what the Site should look like. It binds every Ticket of this Spec, because the Ticket loop builds them unattended from this folder alone and nobody asks you about colors or layout again. Only your approval sends the Tickets to the Ticket loop.";
 
-const refuse = (message: string) => new PipelineError(message);
+export const refuse = (message: string) => new PipelineError(message);
 
 function inStage(issue: Issue, stage: Stage): boolean {
   return issue.labels.some((label) => label.toLowerCase() === stageLabel(stage));
 }
 
-function listFailures(failures: Failure[]): string {
+export function listFailures(failures: Failure[]): string {
   return failures.map(({ reason, location }) => `- ${location}: ${reason}`).join("\n");
 }
 
 /** Tickets are built from the base branch, so a handoff anywhere else would never reach them. */
-async function onBaseBranch(siteDir: string): Promise<void> {
+export async function onBaseBranch(siteDir: string): Promise<void> {
   const { baseBranch } = await readSiteConfig(siteDir);
   const branch = await git(siteDir, "branch", "--show-current");
   if (branch.trim() !== baseBranch) {
@@ -68,12 +68,12 @@ function serveFolder(root: string): Promise<Server> {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
 }
 
-/** Opens every route of the sample in a real browser and keeps a picture of it. Returns the routes. */
-async function takeScreenshots(siteDir: string): Promise<string[]> {
-  const server = await serveFolder(join(siteDir, SAMPLE_FOLDER));
+/** Opens every route of a folder of pages in a real browser and keeps a picture of it. Returns the routes. */
+export async function takeScreenshots(siteDir: string, folder: string, startPage = ""): Promise<string[]> {
+  const server = await serveFolder(join(siteDir, folder));
   const browser = await launchBrowser();
   try {
-    const start = new URL(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`);
+    const start = new URL(`http://127.0.0.1:${(server.address() as AddressInfo).port}/${encodeURIComponent(startPage)}`);
     const { routes } = await findRoutes(browser, start);
     await rm(join(siteDir, SCREENSHOT_FOLDER), { recursive: true, force: true });
     await mkdir(join(siteDir, SCREENSHOT_FOLDER), { recursive: true });
@@ -93,19 +93,17 @@ async function takeScreenshots(siteDir: string): Promise<string[]> {
   }
 }
 
-/**
- * Makes the no-tool Design handoff from the DESIGN.md and sample pages the design skill wrote:
- * generated tokens, a reference screenshot per route and the provenance record, all committed.
- * Running it again replaces them, and the Spec stays in the Design Stage until the Builder approves.
- */
-export async function runDesign(options: { siteDir: string; spec: number; tracker: Tracker; clock: Clock; stdout: (text: string) => void }): Promise<void> {
-  const { siteDir, spec, tracker, clock, stdout } = options;
+/** Only a Spec in the Design Stage gets a handoff, and only on the base branch. */
+export async function assertAwaitingHandoff(siteDir: string, spec: number, tracker: Tracker): Promise<void> {
   const issue = await tracker.getIssue(spec);
   if (issue.state === "closed" || !inStage(issue, "design")) {
     throw refuse(`#${spec} is not a Spec waiting in the Design Stage, so it gets no Design handoff now. Its cut has to be confirmed first, and an approved Design stays: to change it, file a new Request.`);
   }
   await onBaseBranch(siteDir);
+}
 
+/** The DESIGN.md a handoff is made from, once it passes; nothing has changed if this refuses. */
+export async function readPassingDesign(siteDir: string): Promise<string> {
   let design: string;
   try {
     design = await readFile(join(siteDir, DESIGN_FILE), "utf8");
@@ -114,26 +112,45 @@ export async function runDesign(options: { siteDir: string; spec: number; tracke
   }
   const failures = lintDesign(design);
   if (failures.length > 0) throw refuse(`DESIGN.md cannot become the Design handoff yet, and nothing was changed:\n${listFailures(failures)}`);
-  await readFile(join(siteDir, SAMPLE_FOLDER, "index.html")).catch(() => {
-    throw refuse(`${SAMPLE_FOLDER}/index.html could not be read. It is the sample page the design skill builds for the Builder to approve.`);
-  });
+  return design;
+}
 
-  const routes = await takeScreenshots(siteDir);
+/** What every handoff ends with, whichever tool made it: the tokens, the record, the commit and the question to the Builder. */
+export async function finishHandoff(options: { siteDir: string; design: string; provenance: Pick<Provenance, "tool" | "how" | "source" | "spec" | "routes">; clock: Clock; stdout: (text: string) => void }): Promise<void> {
+  const { siteDir, design, clock, stdout } = options;
+  const { tool, how, source, spec, routes } = options.provenance;
   await writeFile(join(siteDir, TOKENS_FILE), serialiseTokens(generateTokens(design)));
-  const provenance: Provenance = {
-    tool: "none",
-    how: `The model wrote DESIGN.md and a sample page from Spec #${spec}; no design tool was used.`,
-    spec,
-    designFormat: DESIGN_FORMAT_VERSION,
-    date: clock.now().toISOString().slice(0, 10),
-    routes,
-  };
+  const provenance: Provenance = { tool, how, ...(source === undefined ? {} : { source }), spec, designFormat: DESIGN_FORMAT_VERSION, date: clock.now().toISOString().slice(0, 10), routes };
   await writeFile(join(siteDir, PROVENANCE_FILE), `${JSON.stringify(provenance, null, 2)}\n`);
   await commitRecord(siteDir, [HANDOFF_FOLDER], `Make the Design handoff for Spec #${spec}`);
 
+  const again = tool === "none" ? `factory design ${spec}` : `factory design import ${tool} ${spec}${source === undefined ? "" : " <where-it-came-from>"}`;
   stdout(`The Design handoff of Spec #${spec} is ready in ${HANDOFF_FOLDER}/ and committed. Run git push so that GitHub has it.\n`);
   stdout(`Reference screenshots: ${routes.map(screenshotFile).join(", ")}\n\n`);
-  stdout(`${WHAT_APPROVAL_MEANS}\n\nOnce the Builder approves: factory design approve ${spec}\nTo change the design: change the files and run factory design ${spec} again.\n`);
+  stdout(`${WHAT_APPROVAL_MEANS}\n\nOnce the Builder approves: factory design approve ${spec}\nTo change the design: change it, then run ${again} again.\n`);
+}
+
+/**
+ * Makes the no-tool Design handoff from the DESIGN.md and sample pages the design skill wrote:
+ * generated tokens, a reference screenshot per route and the provenance record, all committed.
+ * Running it again replaces them, and the Spec stays in the Design Stage until the Builder approves.
+ */
+export async function runDesign(options: { siteDir: string; spec: number; tracker: Tracker; clock: Clock; stdout: (text: string) => void }): Promise<void> {
+  const { siteDir, spec, tracker, clock, stdout } = options;
+  await assertAwaitingHandoff(siteDir, spec, tracker);
+  const design = await readPassingDesign(siteDir);
+  await readFile(join(siteDir, SAMPLE_FOLDER, "index.html")).catch(async () => {
+    const earlier = await readProvenance(siteDir);
+    if (!("reason" in earlier) && earlier.tool !== "none") {
+      throw refuse(`This Design handoff came from ${earlier.tool}, so it has no sample page. To bring in a new version, run factory design import ${earlier.tool} ${spec} with what you fetched.`);
+    }
+    throw refuse(`${SAMPLE_FOLDER}/index.html could not be read. It is the sample page the design skill builds for the Builder to approve.`);
+  });
+
+  const routes = await takeScreenshots(siteDir, SAMPLE_FOLDER);
+  // A design without a tool keeps nothing from an earlier import.
+  for (const folder of [REFERENCE_FOLDER, ASSETS_FOLDER]) await rm(join(siteDir, folder), { recursive: true, force: true });
+  await finishHandoff({ siteDir, design, provenance: { tool: "none", how: `The model wrote DESIGN.md and a sample page from Spec #${spec}; no design tool was used.`, spec, routes }, clock, stdout });
 }
 
 /** The Builder approved the Design handoff: only this moves the Spec's confirmed Tickets to the Build Stage. */

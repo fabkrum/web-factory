@@ -1,0 +1,7 @@
+{
+  "screens": [
+    { "name": "projects/4410/screens/c3d4", "title": "Menu", "deviceType": "DESKTOP" },
+    { "name": "projects/4410/screens/a1b2", "title": "Home", "deviceType": "DESKTOP" },
+    { "name": "projects/4410/screens/e5f6", "title": "Menu", "deviceType": "MOBILE" }
+  ]
+}

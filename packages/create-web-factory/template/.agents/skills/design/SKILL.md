@@ -1,6 +1,6 @@
 ---
 name: design
-description: Make a Spec's Design handoff and get the Builder's approval. Without a design tool, write DESIGN.md and one sample page from the Spec. Use when a Spec waits in the Design Stage, or when the Builder wants to change a Design they have not approved yet.
+description: Make a Spec's Design handoff and get the Builder's approval. With Stitch, Figma or Claude Design, hand over to that tool's import skill; without a design tool, write DESIGN.md and one sample page from the Spec. Use when a Spec waits in the Design Stage, or when the Builder wants to change a Design they have not approved yet.
 ---
 
 # Design
@@ -15,7 +15,14 @@ If you do not know which Spec this is, list them with `gh issue list --label sta
 
 ## 1. Ask about the design tool
 
-Ask whether the Builder wants to use a design tool. Importing from Stitch, Figma or Claude Design is not part of this Factory version yet, so say that plainly and go on without a tool: you write the design and they judge it.
+Ask whether the Builder designed this in Stitch, Figma or Claude Design, or wants no design tool. Every way ends in the same `design/` folder, so the Ticket loop builds the same way whichever they pick.
+
+- Stitch: follow the `import-stitch` skill in `.agents/skills/import-stitch`, then go on at step 6.
+- Figma: follow the `import-figma` skill, then go on at step 6.
+- Claude Design: follow the `import-claude-design` skill, then go on at step 6.
+- No tool: go on with step 2. You write the design and they judge it.
+
+An import needs the Builder's own account with that tool. If they have none and want none, the no-tool way is just as good.
 
 ## 2. Ask what the Site should feel like
 
@@ -49,11 +56,11 @@ If it refuses, it says why: fix DESIGN.md and run it again, and when a color mus
 
 ## 6. Show it and ask
 
-Show the Builder the screenshots in `design/screenshots`, and tell them where to open `design/sample/index.html`. Then say in plain words, in their language, what they are approving and why it binds every Ticket: this design is what the Site will look like, the Ticket loop builds every Ticket of this Spec from this folder alone without asking again, and approving is what sends the Tickets to the Ticket loop.
+Show the Builder the screenshots in `design/screenshots`, and without a tool tell them where to open `design/sample/index.html`. Then say in plain words, in their language, what they are approving and why it binds every Ticket: this design is what the Site will look like, the Ticket loop builds every Ticket of this Spec from this folder alone without asking again, and approving is what sends the Tickets to the Ticket loop.
 
 Ask them to approve it or to ask for changes.
 
-If they want a change, change the files, run `npx factory design <number>` again, show the new result and ask again. The Spec stays in the Design Stage. Never treat silence or a change request as approval.
+If they want a change, change the files, run `npx factory design <number>` again, show the new result and ask again. An imported design changes in its tool: they change it there, and you follow its import skill again. The Spec stays in the Design Stage. Never treat silence or a change request as approval.
 
 ## 7. Approve
 

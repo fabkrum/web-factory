@@ -24,7 +24,7 @@ When the Builder brings an idea or a bug, follow the `request` skill in `.agents
 
 ## The Design handoff
 
-The `design/` folder is the only design input for building: `DESIGN.md` is the source of colors, type and rules, `tokens.json` is generated from it, and `screenshots/` shows what the Builder approved per route. Build what they say, in the Site's own stack. Never copy `design/sample` or any tool's code into the Site: it is reference only. Never edit `tokens.json` by hand.
+The `design/` folder is the only design input for building: `DESIGN.md` is the source of colors, type and rules, `tokens.json` is generated from it, and `screenshots/` shows what the Builder approved per route. Build what they say, in the Site's own stack. Never copy `design/sample` or the tool code in `design/reference` into the Site: it is reference only, and a Review check fails a file copied from `design/reference`. The files in `design/assets` may be used. Never edit `tokens.json` by hand.
 
 ## Required reading: Modern Web Guidance
 
