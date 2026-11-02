@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { copyFixtureRepo, type FixtureRepo } from "./harness/fixture-repo.ts";
@@ -92,6 +92,28 @@ describe("factory design import", () => {
     expect(tracked(site)).toEqual(expect.arrayContaining(["design/screenshots/home.png", "design/screenshots/menu.png", "design/screenshots/menu-2.png", "design/reference/home.html", "design/reference/menu.html", "design/assets/logo.png"]));
     expect(readFileSync(`${site}/design/screenshots/home.png`)).toEqual(readFileSync(join(EXPORTS, "stitch/a1b2.png")));
     expect(run.stdout).toMatch(/binds every Ticket/);
+  });
+
+  it("puts only a Stitch export's images, fonts and video in design/assets, never its code", async () => {
+    const { site, tracker, spec } = siteInDesign();
+    saveExport(site, "stitch");
+
+    const run = await runFactory(["design", "import", "stitch", String(spec), "project 4410"], { cwd: site, tracker });
+
+    expect(run.exitCode, run.stderr).toBe(0);
+    expect(tracked(site).filter((file) => file.startsWith("design/assets/"))).toEqual(["design/assets/logo.png"]);
+  });
+
+  it("keeps code and links out of a Figma export's assets, and leaves no folder when nothing else is there", async () => {
+    const { site, tracker, spec } = siteInDesign();
+    saveExport(site, "figma");
+    writeFile(exportFolder(site, "figma"), "assets/widget.js", "console.log('Figma');");
+    symlinkSync("/etc/hosts", join(exportFolder(site, "figma"), "assets/hosts.png"));
+
+    const run = await runFactory(["design", "import", "figma", String(spec), "project abc"], { cwd: site, tracker });
+
+    expect(run.exitCode, run.stderr).toBe(0);
+    expect(existsSync(`${site}/design/assets`)).toBe(false);
   });
 
   it("fills the same folder from a Figma export, one route per top-level frame", async () => {

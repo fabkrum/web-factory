@@ -140,7 +140,7 @@ async function copyAssets(pages: string, to: string): Promise<void> {
   }
 }
 
-/** Stitch and Figma give the pictures and code: the handoff takes them as they are. */
+/** Stitch and Figma give the pictures and code: the handoff takes them as they are, and from their assets folder only what is an asset. */
 async function importScreens(siteDir: string, folder: string, screens: Screen[], codeExtension: string): Promise<string[]> {
   await checkPictures(folder, screens);
   const routes = routesOf(screens);
@@ -154,7 +154,7 @@ async function importScreens(siteDir: string, folder: string, screens: Screen[],
     if (await isThere(code)) await cp(code, join(siteDir, REFERENCE_FOLDER, `${route.slice(1) || "home"}${codeExtension}`));
   }
   if ((await readdir(join(siteDir, REFERENCE_FOLDER))).length === 0) await rm(join(siteDir, REFERENCE_FOLDER), { recursive: true });
-  if (await isThere(join(folder, "assets"))) await copyDesignFiles(join(folder, "assets"), join(siteDir, ASSETS_FOLDER));
+  if (await isThere(join(folder, "assets"))) await copyAssets(join(folder, "assets"), join(siteDir, ASSETS_FOLDER));
   return routes;
 }
 

@@ -20,7 +20,7 @@ Ask for the link to their Stitch project. Empty the folder `.factory/design-impo
 - `screens.json`: the answer of the tool that lists the project's screens, unchanged.
 - `<id>.png`: each screen's screenshot, where `<id>` is the last part of the screen's `name`.
 - `<id>.html`: each screen's HTML, under the same id.
-- `assets/`: images the design uses, only if the Builder may use them.
+- `assets/`: images, fonts and video the design uses, only if the Builder may use them. The import leaves out anything else in this folder.
 
 Download the files from the addresses Stitch gives. A screen a project lists but will not show has usually just been made: ask the Builder to open the project in the browser, then fetch again.
 
