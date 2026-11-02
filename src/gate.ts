@@ -1,6 +1,7 @@
 import { git, gitSucceeds } from "./git.ts";
 import { movedPins } from "./pins.ts";
 import { runShell } from "./shell.ts";
+import { weakenedTests } from "./weakened-tests.ts";
 
 /**
  * A green gate names the commit it tested, so that exact commit is what gets merged,
@@ -14,7 +15,7 @@ const OUTPUT_TAIL_LINES = 30;
  * The gate the script decides, not the model: the session committed something
  * of its own on the Ticket's branch (a merge that only catches up with the
  * integration branch is not work), on top of the integration branch, moving no pinned
- * version, the Site's test command is green (a red run gets one rerun), and after the tests
+ * version, deleting, skipping or rewiring none of the Site's tests, the Site's test command is green (a red run gets one rerun), and after the tests
  * nothing is left uncommitted.
  */
 export async function runGate(
@@ -40,6 +41,15 @@ export async function runGate(
     return {
       passed: false,
       reason: `This work changes ${moved.join(" and ")}. Pinned versions move only through the pull request of \`factory update\`, so put them back.`,
+    };
+  }
+
+  // A green run proves only what the tests still check, so a Ticket keeps every test the Site had.
+  const weakened = await weakenedTests(worktree, base, "HEAD");
+  if (weakened.length > 0) {
+    return {
+      passed: false,
+      reason: `This work ${weakened.join(", and ")}. A Ticket passes on the tests the Site already had, so put them back and make the work pass them; if a test is really wrong, say so and park the Ticket instead.`,
     };
   }
 
