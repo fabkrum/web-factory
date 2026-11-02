@@ -7,6 +7,10 @@ export interface ContractSubject {
   tracker: Tracker;
   /** Pushes a branch with a commit of its own to the Site's remote; returns the base it can merge into. */
   pushBranch(name: string): Promise<string>;
+  /** The Builder presses the merge button on a pull request. */
+  mergeByHand(pullRequest: number): Promise<void>;
+  /** The Builder closes a pull request without merging it. */
+  closePullRequestByHand(pullRequest: number): Promise<void>;
   /** The Builder reopens an issue by hand. */
   reopenByHand(issue: number): Promise<void>;
   createLabel(name: string): Promise<void>;
@@ -147,6 +151,34 @@ export function trackerContract(
       expect(opened.url).toMatch(new RegExp(`/pull/${opened.number}$`));
       expect(await tracker.pullRequestFrom(head)).toEqual(opened);
       expect(await tracker.pullRequestFrom(`loop/never-pushed-${run}`)).toBeUndefined();
+    });
+
+    it("rewrites what an open pull request says", async () => {
+      const { tracker, pushBranch } = await subject();
+      const head = `loop/rewritten-${run}`;
+      const base = await pushBranch(head);
+      const { number } = await tracker.openPullRequest({ head, base, title: `Rewritten ${run}`, body: "Preview: https://old.example" });
+
+      await tracker.updatePullRequest(number, { body: "Preview: https://new.example" });
+
+      expect((await tracker.pullRequestFrom(head))?.body).toBe("Preview: https://new.example");
+    });
+
+    it("tells a merged pull request from an open one and from one closed without merging", async () => {
+      const { tracker, pushBranch, mergeByHand, closePullRequestByHand } = await subject();
+      const merged = `loop/merged-${run}`;
+      const merging = await tracker.openPullRequest({ head: merged, base: await pushBranch(merged), title: `Merged ${run}`, body: "Read it." });
+      const dropped = `loop/dropped-${run}`;
+      const dropping = await tracker.openPullRequest({ head: dropped, base: await pushBranch(dropped), title: `Dropped ${run}`, body: "" });
+      expect(await tracker.mergedPullRequestFrom(merged)).toBeUndefined();
+
+      await mergeByHand(merging.number);
+      await closePullRequestByHand(dropping.number);
+
+      expect(await tracker.mergedPullRequestFrom(merged)).toEqual(merging);
+      expect(await tracker.pullRequestFrom(merged)).toBeUndefined();
+      expect(await tracker.mergedPullRequestFrom(dropped)).toBeUndefined();
+      expect(await tracker.pullRequestFrom(dropped)).toBeUndefined();
     });
 
     it("lists the open issues with each Ticket's Spec, without closed ones or pull requests", async () => {

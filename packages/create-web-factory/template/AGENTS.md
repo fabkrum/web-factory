@@ -20,7 +20,9 @@ Every terminal step you ask of the Builder is exactly one command.
 
 Every Request travels eight Stages: Request, Spec, Design, Build, Review, Approve, Publish, Measure. The Builder decides at Request, Spec, Design and Approve. The rest runs by itself.
 
-When the Builder brings an idea or a bug, follow the `request` skill in `.agents/skills/request`. To work a Request out, follow the `spec` skill in `.agents/skills/spec`. When a Spec waits in the Design Stage, follow the `design` skill in `.agents/skills/design`.
+When the Builder brings an idea or a bug, follow the `request` skill in `.agents/skills/request`. To work a Request out, follow the `spec` skill in `.agents/skills/spec`. When a Spec waits in the Design Stage, follow the `design` skill in `.agents/skills/design`. When a Spec waits in the Approve Stage, follow the `approve` skill in `.agents/skills/approve`.
+
+When the Builder asks what to do now, or you do not know where the work stands, follow the `next` skill in `.agents/skills/next`.
 
 ## The Design handoff
 

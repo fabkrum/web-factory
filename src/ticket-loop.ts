@@ -42,7 +42,7 @@ export interface LoopResult {
 }
 
 export interface SpecPullRequest extends PullRequest {
-  /** The Preview URL from the host, or undefined when the pull request was already open from an earlier run. */
+  /** The Preview URL from the host, or undefined when an earlier run's Preview still shows this pull request. */
   preview?: string;
   opened: boolean;
 }
@@ -175,7 +175,9 @@ async function whyBlocked(
 /**
  * Pushes the Spec's integration branch, and only it, and opens one pull request
  * against the base branch with the host's Preview URL. A rerun pushes again and
- * finds the open pull request instead of opening a second one.
+ * finds the open pull request instead of opening a second one; if the push moved the
+ * branch, as after a change the Builder asked for, the Preview is made anew, since
+ * that is what the Builder reads. Either way the Spec now waits in the Approve Stage.
  */
 async function openSpecPullRequest(options: LoopOptions): Promise<SpecPullRequest | undefined> {
   const { siteDir, spec, config, tracker, host, log } = options;
@@ -190,6 +192,8 @@ async function openSpecPullRequest(options: LoopOptions): Promise<SpecPullReques
       `Every Ticket of Spec #${spec} passed, but this Site repository has no remote called ${REMOTE}, so ${integration} cannot become a pull request. Connect the Site to GitHub, then run the Ticket loop again.`,
     );
   }
+  const pushedBefore = (await git(siteDir, "ls-remote", "--heads", REMOTE, `refs/heads/${integration}`)).split(/\s/)[0];
+  const tip = (await git(siteDir, "rev-parse", integration)).trim();
   // An explicit refspec, so the push can only ever move the integration branch on the remote.
   try {
     await git(siteDir, "push", "--quiet", REMOTE, `refs/heads/${integration}:refs/heads/${integration}`);
@@ -198,30 +202,43 @@ async function openSpecPullRequest(options: LoopOptions): Promise<SpecPullReques
   }
 
   const existing = await tracker.pullRequestFrom(integration);
-  if (existing) {
-    log(`Spec #${spec}: pushed ${integration}, which updates its pull request #${existing.number}`);
+  if (existing && pushedBefore === tip) {
+    log(`Spec #${spec}: pushed ${integration}, which holds nothing new for its pull request #${existing.number}`);
+    await tracker.moveToStage(spec, "approve");
     return { ...existing, opened: false };
   }
   const preview = await host.deployPreview({ siteDir, branch: integration });
-  const specIssue = await tracker.getIssue(spec);
-  const tickets = (await tracker.ticketsOf(spec)).sort((a, b) => a.number - b.number);
-  const pullRequest = await tracker.openPullRequest({
-    head: integration,
-    base: config.baseBranch,
-    title: specIssue.title,
-    body: [
-      `Every Ticket of Spec #${spec} passed the Ticket loop, and this pull request holds them all.`,
-      "",
-      `Preview: ${preview}`,
-      "",
-      "Tickets:",
-      ...tickets.map((ticket) => `- #${ticket.number} ${ticket.title}`),
-      "",
-      `Read the Preview. When the Site does what Spec #${spec} asks, merge this pull request to Approve it.`,
-    ].join("\n"),
-  });
+  const body = await pullRequestBody(options, preview);
+  if (existing) {
+    await tracker.updatePullRequest(existing.number, { body });
+    log(`Spec #${spec}: pushed ${integration}, which updates its pull request #${existing.number}, with the new Preview ${preview}`);
+    await tracker.moveToStage(spec, "approve");
+    return { ...existing, body, preview, opened: false };
+  }
+  const { title } = await tracker.getIssue(spec);
+  const pullRequest = await tracker.openPullRequest({ head: integration, base: config.baseBranch, title, body });
   log(`Spec #${spec}: opened pull request #${pullRequest.number} with the Preview ${preview}`);
+  await tracker.moveToStage(spec, "approve");
   return { ...pullRequest, preview, opened: true };
+}
+
+async function pullRequestBody({ spec, tracker }: LoopOptions, preview: string): Promise<string> {
+  const tickets = (await tracker.ticketsOf(spec)).sort((a, b) => a.number - b.number);
+  return [
+    `Every Ticket of Spec #${spec} passed the Ticket loop, and this pull request holds them all.`,
+    "",
+    `Preview: ${preview}`,
+    "",
+    "Tickets:",
+    ...tickets.map((ticket) => `- #${ticket.number} ${ticket.title}`),
+    "",
+    `Read the Preview. When the Site does what Spec #${spec} asks, merge this pull request to Approve it.`,
+  ].join("\n");
+}
+
+/** The Preview's address, as the Ticket loop wrote it in the pull request. */
+export function previewIn(body: string): string | undefined {
+  return /^Preview: (\S+)$/m.exec(body)?.[1];
 }
 
 async function buildTicket(ticket: Issue, options: LoopOptions): Promise<Outcome> {

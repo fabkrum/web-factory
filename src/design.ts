@@ -161,6 +161,10 @@ export async function approveDesign(options: { siteDir: string; spec: number; tr
     stdout(`The Design of Spec #${spec} is already approved, so its Tickets are in the Build Stage. Start them with: factory loop ${spec}\n`);
     return;
   }
+  if ((["review", "approve", "publish", "measure"] as const).some((stage) => inStage(issue, stage))) {
+    stdout(`The Design of Spec #${spec} is already approved, and the Spec has moved on since. To see what to do now, run: factory next\n`);
+    return;
+  }
   if (issue.state === "closed" || !inStage(issue, "design")) {
     throw refuse(`#${spec} is not a Spec waiting in the Design Stage, so there is no Design to approve. If it is a Ticket, approve its Spec instead.`);
   }

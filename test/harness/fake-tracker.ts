@@ -12,7 +12,7 @@ export interface FakePullRequest extends PullRequest {
   base: string;
   title: string;
   body: string;
-  state: "open" | "merged";
+  state: "open" | "merged" | "closed";
 }
 
 /** An in-memory stand-in for the Site's GitHub issues and pull requests. */
@@ -137,14 +137,39 @@ export class FakeTracker implements Tracker {
 
   async pullRequestFrom(head: string): Promise<PullRequest | undefined> {
     const found = this.pullRequests.find((pr) => pr.head === head && pr.state === "open");
-    return found && { number: found.number, url: found.url };
+    return found && { number: found.number, url: found.url, body: found.body };
+  }
+
+  async mergedPullRequestFrom(head: string): Promise<PullRequest | undefined> {
+    const found = this.pullRequests.find((pr) => pr.head === head && pr.state === "merged");
+    return found && { number: found.number, url: found.url, body: found.body };
+  }
+
+  /** The Builder presses the merge button on GitHub. */
+  mergeByHand(number: number): void {
+    this.#pullRequest(number).state = "merged";
+  }
+
+  /** The Builder closes a pull request on GitHub without merging it. */
+  closePullRequestByHand(number: number): void {
+    this.#pullRequest(number).state = "closed";
+  }
+
+  #pullRequest(number: number): FakePullRequest {
+    const found = this.pullRequests.find((pr) => pr.number === number);
+    if (!found) throw new Error(`fake tracker has no pull request #${number}`);
+    return found;
   }
 
   async openPullRequest(fields: { head: string; base: string; title: string; body: string }): Promise<PullRequest> {
     const number = this.#next++;
     const url = `https://github.example.test/site/pull/${number}`;
     this.pullRequests.push({ number, url, state: "open", ...fields });
-    return { number, url };
+    return { number, url, body: fields.body };
+  }
+
+  async updatePullRequest(number: number, { body }: { body: string }): Promise<void> {
+    this.#pullRequest(number).body = body;
   }
 
   async historyOf(number: number): Promise<IssueEvent[]> {
@@ -201,6 +226,8 @@ export function delegateTo(tracker: Tracker): Tracker {
     comment: (issue, body) => tracker.comment(issue, body),
     close: (issue) => tracker.close(issue),
     pullRequestFrom: (head) => tracker.pullRequestFrom(head),
+    mergedPullRequestFrom: (head) => tracker.mergedPullRequestFrom(head),
     openPullRequest: (pullRequest) => tracker.openPullRequest(pullRequest),
+    updatePullRequest: (number, fields) => tracker.updatePullRequest(number, fields),
   };
 }

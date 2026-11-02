@@ -38,6 +38,16 @@ The skill shows the Builder the result and explains what approving means. `facto
 
 The Review check `code/design` runs on every Ticket: DESIGN.md's lint and contrast, `tokens.json` still matching what DESIGN.md generates, a screenshot for every route in `source.json`, and no file of the Site being a whole copy of tool code in `design/reference` (a reworked copy goes unseen). It is reported as not run on a Site that never had a handoff. The DESIGN.md format version is pinned in `src/design-handoff.ts`, and the `@google/design.md` package at one exact version in `package.json`; `factory update` will move them on purpose.
 
+## Approve
+
+Once every Ticket of a Spec has Passed, the Ticket loop opens the Spec's pull request and moves the Spec to the Approve Stage. The `approve` skill walks the Builder through it: `factory approve <spec>` shows the Preview and the pull request, the Builder reads the Preview and, when the Site does what the Spec says, presses the merge button on GitHub themselves. No session merges: that button is the Builder's Approve. The same command run again sees the merge, also one made without the skill, and moves the Spec to the Publish Stage.
+
+If the Builder asks for changes instead, the skill writes the change to a file and `factory approve change <spec> <change-file>` files it as a new Ticket in the Build Stage and moves the Spec back there. The next `factory loop <spec>` builds it, pushes to the same pull request, makes a new Preview, and the Spec is back in Approve.
+
+## What to do now
+
+The `next` skill runs `factory next`, which reads the board and names exactly one action and the skill for it, or says that the action needs none. It picks what is closest to the Visitor first: a Spec to Approve, a Ticket that needs the Builder, a Ticket loop to start, then Design, Spec and Request. Only when nothing needs the Builder does it say to wait for a running Ticket loop, or to bring the next idea. Before Kickoff it says so without asking for a GitHub login.
+
 ## The board
 
 `npm run board` (or `factory board`) opens a local page drawn like the workshop diagram: one column per Stage, Decision stages blue, Automatic stages green. Every open Request and Ticket sits in the column of its Stage label, with its attempt count, the failing Review check, the reason in plain words and the one next action. A Ticket parked on another machine shows too: its park comment carries the reason and the attempt count. A Ticket waiting on a rate limit shows as waiting, with its resume time. The page reloads itself every 30 seconds, except while you read a whole reason, and the board stays open until you press Ctrl+C.

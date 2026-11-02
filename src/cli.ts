@@ -6,10 +6,12 @@ import { CONFIG_FILE, ConfigError, readSiteConfig } from "./config.ts";
 import { ReviewError } from "./review/check.ts";
 import { couldNotRun, formatReport } from "./review/report.ts";
 import { REVIEW_CHECKS, runReview } from "./review/review.ts";
+import { approveChange, runApprove } from "./approve.ts";
 import { BoardError, boardAddress, readBoard, serveBoard } from "./board.ts";
 import { approveDesign, runDesign } from "./design.ts";
 import { IMPORT_TOOLS, runDesignImport, type ImportTool } from "./design-import.ts";
 import { KickoffError, runKickoff } from "./kickoff.ts";
+import { formatNextStep, whatIsNext } from "./next.ts";
 import { PipelineError, runRequest } from "./request.ts";
 import { confirmCut, runSpec } from "./spec.ts";
 import { LoopError, runTicketLoop, type ReviewSite } from "./ticket-loop.ts";
@@ -63,6 +65,13 @@ export const USAGE = `Usage:
                                   came from, such as its address; claude-design can do without
   factory design approve <spec>   The Builder approved the Design: its Tickets move to Build
   factory loop <spec>             Build the open Tickets of Spec number <spec>, unattended
+  factory approve <spec>          Approve Spec number <spec>: while its pull request is open
+                                  this shows the Preview and the pull request; once the
+                                  Builder merged it, the Spec moves to the Publish Stage
+  factory approve change <spec> <change-file>
+                                  The Builder asked for a change at Approve: a new Ticket
+                                  in the Build Stage; the approve skill writes the file
+  factory next [--json]           Say the one thing to do now and which skill to use
   factory board [--json] [--port <port>]
                                   Open the board: every open Request and Ticket in its
                                   Stage, why anything is stuck, and the one next action.
@@ -106,6 +115,8 @@ export async function factory(argv: string[], deps: FactoryDeps): Promise<number
   if (command === "request") return request(args, deps);
   if (command === "spec") return spec(args, deps);
   if (command === "design") return design(args, deps);
+  if (command === "approve") return approve(args, deps);
+  if (command === "next") return next(args, deps);
   if (command === "board") return board(args, deps);
   if (command !== "loop") {
     deps.stderr(`factory does not know the command "${command}".\n\n${USAGE}`);
@@ -172,6 +183,36 @@ async function design(args: string[], deps: FactoryDeps): Promise<number> {
   }
   if (approving) return onTracker(deps, (tracker) => approveDesign({ siteDir: deps.cwd, spec: number, tracker, stdout: deps.stdout }));
   return onTracker(deps, (tracker) => runDesign({ siteDir: deps.cwd, spec: number, tracker, clock: deps.clock ?? systemClock, stdout: deps.stdout }));
+}
+
+async function approve(args: string[], deps: FactoryDeps): Promise<number> {
+  if (args[0] === "change") {
+    const number = issueNumber(args[1]);
+    const file = args[2];
+    if (args.length !== 3 || number === undefined || file === undefined) {
+      deps.stderr(`factory approve change needs the number of the Spec and the file with the change, for example: factory approve change 12 .factory/change.json\n\n${USAGE}`);
+      return 2;
+    }
+    return onTracker(deps, (tracker) => approveChange({ siteDir: deps.cwd, spec: number, file, tracker, stdout: deps.stdout }));
+  }
+  const number = issueNumber(args[0]);
+  if (args.length !== 1 || number === undefined) {
+    deps.stderr(`factory approve needs the number of the Spec, for example: factory approve 12\n\n${USAGE}`);
+    return 2;
+  }
+  return onTracker(deps, (tracker) => runApprove({ spec: number, tracker, stdout: deps.stdout }));
+}
+
+async function next(args: string[], deps: FactoryDeps): Promise<number> {
+  const json = args.includes("--json");
+  if (args.some((arg) => arg !== "--json")) {
+    deps.stderr(`factory next takes only --json.\n\n${USAGE}`);
+    return 2;
+  }
+  return onTracker(deps, async (tracker) => {
+    const step = await whatIsNext({ siteDir: deps.cwd, tracker, clock: deps.clock ?? systemClock });
+    deps.stdout(json ? `${JSON.stringify(step, null, 2)}\n` : formatNextStep(step));
+  });
 }
 
 /** A step that writes to GitHub: what stops it is printed for the Builder, and running it again finishes it. */
@@ -285,7 +326,7 @@ async function loop(spec: number, deps: FactoryDeps): Promise<number> {
       deps.stdout(
         pr.opened
           ? `Spec #${spec} is built. Read its Preview at ${pr.preview}, then merge pull request #${pr.number} to Approve it: ${pr.url}\n`
-          : `Spec #${spec} is built and its pull request #${pr.number} is up to date: ${pr.url}\n`,
+          : `Spec #${spec} is built and its pull request #${pr.number} is up to date${pr.preview ? `, with a new Preview at ${pr.preview}` : ""}: ${pr.url}\n`,
       );
     }
     return result.parked.length + result.notPassed.length + result.blocked.length > 0 ? 1 : 0;

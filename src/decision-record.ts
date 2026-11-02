@@ -100,6 +100,12 @@ export function findStackSection(agents: string): { start: number; end: number; 
   return { start, end, body: agents.slice(start, end).trim() };
 }
 
+/** Whether AGENTS.md holds a Kickoff's decisions yet: its Stack section says so until then. */
+export function kickoffRecorded(agents: string): boolean {
+  const section = findStackSection(agents);
+  return section !== undefined && !section.body.startsWith("Not decided yet");
+}
+
 export function withStackSection(agents: string, body: string): string {
   const section = findStackSection(agents);
   if (!section) return `${agents.trimEnd()}\n\n## Stack\n\n${body}\n`;

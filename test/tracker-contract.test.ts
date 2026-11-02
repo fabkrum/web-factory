@@ -10,6 +10,8 @@ trackerContract("the fake tracker", async () => {
   return {
     tracker,
     pushBranch: async () => "main",
+    mergeByHand: async (pullRequest) => tracker.mergeByHand(pullRequest),
+    closePullRequestByHand: async (pullRequest) => tracker.closePullRequestByHand(pullRequest),
     reopenByHand: async (issue) => tracker.reopen(issue),
     createLabel: async (name) => tracker.createLabel(name),
     deleteLabel: async (name) => tracker.deleteLabel(name),
@@ -24,6 +26,8 @@ trackerContract("the GitHub tracker against a fake GitHub", async () => {
       github.pushBranch(name);
       return "main";
     },
+    mergeByHand: async (pullRequest) => github.mergeByHand(pullRequest),
+    closePullRequestByHand: async (pullRequest) => github.closePullRequestByHand(pullRequest),
     reopenByHand: async (issue) => github.reopenByHand(issue),
     createLabel: async (name) => github.createLabel(name),
     deleteLabel: async (name) => github.deleteLabel(name),
@@ -77,6 +81,8 @@ async function realSubject(repo: string) {
       });
       return base as string;
     },
+    mergeByHand: async (pullRequest: number) => void (await api("PUT", `pulls/${pullRequest}/merge`, {})),
+    closePullRequestByHand: async (pullRequest: number) => void (await api("PATCH", `pulls/${pullRequest}`, { state: "closed" })),
     reopenByHand: async (issue: number) => void (await api("PATCH", `issues/${issue}`, { state: "open" })),
     createLabel: async (name: string) => void (await api("POST", "labels", { name })),
     deleteLabel: async (name: string) => {

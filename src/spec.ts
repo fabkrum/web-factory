@@ -1,8 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { adrPath, AGENTS_FILE, commitRecord, fieldReader, findStackSection, hasSectionHeading, readSkillFile, renderAdr, requestContext, withStackSection, writeAdr, type Choice } from "./decision-record.ts";
+import { adrPath, AGENTS_FILE, commitRecord, fieldReader, findStackSection, hasSectionHeading, kickoffRecorded, readSkillFile, renderAdr, requestContext, withStackSection, writeAdr, type Choice } from "./decision-record.ts";
 import { PipelineError } from "./request.ts";
-import { stageLabel } from "./stages.ts";
+import { stageLabel, type Stage } from "./stages.ts";
 import type { Issue, Tracker } from "./tracker.ts";
 
 /** A later Architecture decision, raised by a Request that touches the Site's architecture. */
@@ -33,7 +33,6 @@ const { text, record, choice } = fieldReader("The Spec's file and its fields", r
 
 /** Heads the Builder's own words in a Spec; a changed cut finds them again by it. */
 const REQUEST_HEADING = "## The Request, in the Builder's words";
-const NOTHING_DECIDED = "Not decided yet";
 
 function list(value: unknown, field: string): string[] {
   if (!Array.isArray(value) || value.length === 0) throw refuse(`The Spec's file and its fields have no ${field}.`);
@@ -114,7 +113,7 @@ function specBody(spec: SpecFile, words: string, adr: string | undefined): strin
   ].join("\n\n");
 }
 
-function ticketBody(ticket: CutTicket, spec: number): string {
+export function ticketBody(ticket: Pick<CutTicket, "delivers" | "acceptance">, spec: number): string {
   return `Part of #${spec}.\n\n## What to build\n\n${ticket.delivers}\n\n## Acceptance criteria\n\n${bullets(ticket.acceptance, "[ ] ")}`;
 }
 
@@ -127,7 +126,7 @@ async function recordDecision(siteDir: string, spec: SpecFile, decision: Archite
     throw refuse(`This folder has no ${AGENTS_FILE}, so it is not a Site. Run factory from your Site's folder.`);
   }
   const section = findStackSection(agents);
-  if (!section || section.body.startsWith(NOTHING_DECIDED)) {
+  if (!section || !kickoffRecorded(agents)) {
     throw refuse("This Site has had no Kickoff yet, so there is no architecture for this decision to change. Follow the kickoff skill first.");
   }
   const path = await adrPath(siteDir, decision.title, spec.request);
@@ -185,7 +184,7 @@ export async function runSpec(options: { siteDir: string; file: string; tracker:
   stdout(`\nOnce you confirm the cut: factory spec confirm ${issue.number}\nTo change it: change the file and run factory spec again.\n`);
 }
 
-function inStage(issue: Issue, stage: "request" | "spec" | "design"): boolean {
+export function inStage(issue: Issue, stage: Stage): boolean {
   return issue.labels.some((label) => label.toLowerCase() === stageLabel(stage));
 }
 

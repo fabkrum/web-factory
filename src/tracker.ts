@@ -29,6 +29,8 @@ export type IssueEvent = { kind: "comment"; body: string } | { kind: "closed" } 
 export interface PullRequest {
   number: number;
   url: string;
+  /** What it says; the Ticket loop writes the Preview's address here. */
+  body: string;
 }
 
 /** GitHub refused because nobody is logged in; the Builder has to log in, nothing else helps. */
@@ -65,5 +67,9 @@ export interface Tracker {
   close(issue: number): Promise<void>;
   /** The open pull request from a branch that has already been pushed, if there is one. */
   pullRequestFrom(head: string): Promise<PullRequest | undefined>;
+  /** The pull request from a branch that was merged, if there is one; one closed without merging is not. */
+  mergedPullRequestFrom(head: string): Promise<PullRequest | undefined>;
   openPullRequest(pullRequest: { head: string; base: string; title: string; body: string }): Promise<PullRequest>;
+  /** Replaces what an open pull request says. */
+  updatePullRequest(number: number, fields: { body: string }): Promise<void>;
 }

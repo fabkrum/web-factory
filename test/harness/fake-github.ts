@@ -25,6 +25,7 @@ interface StoredPullRequest {
   title: string;
   body: string;
   state: "open" | "closed";
+  merged: boolean;
 }
 
 /** GitHub's own page size is 30 or more; a tiny one makes an adapter that forgets later pages fail. */
@@ -63,6 +64,16 @@ export class FakeGitHub {
   /** Pushes a branch to the fake remote, so a pull request can be opened from it. */
   pushBranch(name: string): void {
     this.#branches.add(name);
+  }
+
+  /** The Builder presses the merge button on GitHub. */
+  mergeByHand(number: number): void {
+    Object.assign(this.#pulls.get(number)!, { state: "closed", merged: true });
+  }
+
+  /** The Builder closes a pull request on GitHub without merging it. */
+  closePullRequestByHand(number: number): void {
+    this.#pulls.get(number)!.state = "closed";
   }
 
   /** The Builder reopens an issue on GitHub. */
@@ -229,8 +240,15 @@ export class FakeGitHub {
       if ([...this.#pulls.values()].some((pull) => pull.head === head && pull.state === "open")) {
         throw new HttpError(422, "Validation Failed");
       }
-      const pull: StoredPullRequest = { number: this.#nextNumber++, head, base, title: String(body.title), body: String(body.body ?? ""), state: "open" };
+      const pull: StoredPullRequest = { number: this.#nextNumber++, head, base, title: String(body.title), body: String(body.body ?? ""), state: "open", merged: false };
       this.#pulls.set(pull.number, pull);
+      return this.#pullJson(pull);
+    }
+
+    if ((match = route.match(/^PATCH pulls\/(\d+)$/))) {
+      const pull = this.#pulls.get(Number(match[1]));
+      if (!pull) throw new HttpError(404, "Not Found");
+      pull.body = String(body.body);
       return this.#pullJson(pull);
     }
 
@@ -278,7 +296,7 @@ export class FakeGitHub {
   }
 
   #pullJson(pull: StoredPullRequest): Record<string, unknown> {
-    return { number: pull.number, html_url: `https://github.test/${this.repo}/pull/${pull.number}`, state: pull.state };
+    return { number: pull.number, html_url: `https://github.test/${this.repo}/pull/${pull.number}`, body: pull.body === "" ? null : pull.body, state: pull.state, merged_at: pull.merged ? "2026-11-02T10:00:00Z" : null };
   }
 }
 

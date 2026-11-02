@@ -43,6 +43,8 @@ interface GitHubIssue {
 interface GitHubPullRequest {
   number: number;
   html_url: string;
+  body: string | null;
+  merged_at?: string | null;
 }
 
 interface GitHubTimelineEvent {
@@ -170,15 +172,27 @@ export class GitHubTracker implements Tracker {
   }
 
   async pullRequestFrom(head: string): Promise<PullRequest | undefined> {
-    const owner = (await this.#repository()).split("/")[0];
-    const query = new URLSearchParams({ state: "open", head: `${owner}:${head}` });
-    const [found] = (await this.#list(`pulls?${query}`)) as GitHubPullRequest[];
-    return found && { number: found.number, url: found.html_url };
+    const [found] = await this.#pullsFrom(head, "open");
+    return found && toPullRequest(found);
+  }
+
+  async mergedPullRequestFrom(head: string): Promise<PullRequest | undefined> {
+    const found = (await this.#pullsFrom(head, "closed")).find((pull) => pull.merged_at);
+    return found && toPullRequest(found);
   }
 
   async openPullRequest(pullRequest: { head: string; base: string; title: string; body: string }): Promise<PullRequest> {
-    const opened = (await this.#api("POST", "pulls", pullRequest)) as GitHubPullRequest;
-    return { number: opened.number, url: opened.html_url };
+    return toPullRequest((await this.#api("POST", "pulls", pullRequest)) as GitHubPullRequest);
+  }
+
+  async updatePullRequest(number: number, { body }: { body: string }): Promise<void> {
+    await this.#api("PATCH", `pulls/${number}`, { body });
+  }
+
+  async #pullsFrom(head: string, state: "open" | "closed"): Promise<GitHubPullRequest[]> {
+    const owner = (await this.#repository()).split("/")[0];
+    const query = new URLSearchParams({ state, head: `${owner}:${head}` });
+    return (await this.#list(`pulls?${query}`)) as GitHubPullRequest[];
   }
 
   async #toIssue(issue: GitHubIssue): Promise<Issue> {
@@ -232,6 +246,10 @@ export class GitHubTracker implements Tracker {
 }
 
 const API_HEADERS = ["-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28"];
+
+function toPullRequest(pull: GitHubPullRequest): PullRequest {
+  return { number: pull.number, url: pull.html_url, body: pull.body ?? "" };
+}
 
 function labelNames(issue: GitHubIssue): string[] {
   return issue.labels.map((label) => (typeof label === "string" ? label : label.name));

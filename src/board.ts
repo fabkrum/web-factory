@@ -57,6 +57,11 @@ export async function readBoard({ siteDir, tracker, clock }: { siteDir: string; 
     const card = await cardOf(issue, stage, local?.state, issue.parent ?? local?.spec, tracker, clock);
     columns.find((column) => column.stage === stage)!.cards.push(card);
   }
+  // A Spec in Build moves with its Tickets, and each of those says what to do.
+  const specsWithTickets = new Set(columns.flatMap((column) => column.cards.map((card) => card.spec)));
+  for (const card of columns.find((column) => column.stage === "build")!.cards) {
+    if (card.spec === undefined && specsWithTickets.has(card.number)) card.nextAction = "Nothing to do on this Spec: its Tickets show where it stands.";
+  }
   return { columns, withoutStage };
 }
 
@@ -132,7 +137,7 @@ function loopAction(issue: OpenIssue, state: KnownState, wasAnswered: boolean, s
 
 /** What an issue outside the Ticket loop needs next, which only its Stage decides. */
 function stageAction(stage: Stage, issue: OpenIssue, isTicket: boolean): string {
-  if (isTicket && (stage === "spec" || stage === "design")) {
+  if (isTicket && (stage === "spec" || stage === "design" || stage === "approve")) {
     return `Nothing to do on this Ticket: it moves on with its Spec${issue.parent === undefined ? "" : ` #${issue.parent}`}.`;
   }
   switch (stage) {
@@ -145,7 +150,7 @@ function stageAction(stage: Stage, issue: OpenIssue, isTicket: boolean): string 
     case "build":
       return `Run the Ticket loop: ${loopCommand(issue.number)}`;
     case "approve":
-      return "Read the Preview, then merge the pull request to Approve it.";
+      return "Ask your Agent CLI to use the approve skill, which walks you through reading the Preview and merging the pull request.";
     default:
       return "Nothing to do: this Stage runs by itself.";
   }

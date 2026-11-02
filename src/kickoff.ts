@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AGENT_CLIS, CONFIG_FILE, ConfigError, type AgentCliName } from "./config.ts";
-import { AGENTS_FILE, commitRecord, fieldReader, findStackSection, hasSectionHeading, readSkillFile, renderAdr, withStackSection, writeAdr, type Choice } from "./decision-record.ts";
+import { AGENTS_FILE, commitRecord, fieldReader, findStackSection, hasSectionHeading, kickoffRecorded, readSkillFile, renderAdr, withStackSection, writeAdr, type Choice } from "./decision-record.ts";
 import type { Tracker } from "./tracker.ts";
 
 /** What the Builder decided at Kickoff; the kickoff skill writes it down after their conversation. */
@@ -21,7 +21,6 @@ export class KickoffError extends Error {}
 
 const STACK_ADR = "docs/adr/0001-stack.md";
 const HOST_ADR = "docs/adr/0002-host.md";
-const NOTHING_DECIDED = "Not decided yet";
 
 const LOCALE_PACK_ON = "The German Locale pack is on: Review checks the Impressum, the privacy policy, price display, and fonts and third-party requests before consent. It catches common mistakes and is not legal advice.";
 const LOCALE_PACK_OFF = "No Locale pack is on: Review runs only the generic checks, which check no country's law. This is not legal advice.";
@@ -171,7 +170,7 @@ export async function runKickoff(options: { siteDir: string; file: string; track
     throw new KickoffError(`This folder has no ${AGENTS_FILE}, so it is not a Site. Run factory from your Site's folder.`);
   }
   const recorded = findStackSection(agents)?.body;
-  if (recorded === undefined || recorded.startsWith(NOTHING_DECIDED)) {
+  if (recorded === undefined || !kickoffRecorded(agents)) {
     await writeRecord(siteDir, decisions, agents);
   } else if (recorded !== stackBody(decisions)) {
     throw new KickoffError(
