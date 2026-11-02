@@ -14,8 +14,10 @@ import { KickoffError, runKickoff } from "./kickoff.ts";
 import { formatNextStep, whatIsNext } from "./next.ts";
 import { PipelineError, runRequest } from "./request.ts";
 import { confirmCut, runSpec } from "./spec.ts";
+import { runUpdate } from "./update.ts";
 import { LoopError, runTicketLoop, type ReviewSite } from "./ticket-loop.ts";
 import type { Host } from "./host.ts";
+import type { FactoryReleases } from "./releases.ts";
 import { NotLoggedInError, type Tracker } from "./tracker.ts";
 
 export interface FactoryDeps {
@@ -24,6 +26,8 @@ export interface FactoryDeps {
   agentCli?: AgentCli;
   /** The Site's issues on GitHub (the GitHub tracker), or a fake in tests. */
   tracker?: Tracker;
+  /** Where the Factory is published (npm), or a fake in tests. */
+  releases?: FactoryReleases;
   /** Missing until the Builder's host adapter exists. */
   host?: Host;
   /** The real clock unless a test fakes it. */
@@ -80,6 +84,10 @@ export const USAGE = `Usage:
   factory review <url> [--json] [--check <id>]
                                   Run every Review check on the Site served at <url>,
                                   or only the ones named with --check
+  factory update                  Bring the newest Factory into the Site as a pull request
+                                  that lists what changed: skills, Review checks, Modern Web
+                                  Guidance and the DESIGN.md format. Nothing in the Site
+                                  changes until the Builder merges it
   factory --help                  Show this help
 
 factory review checks every route its Site links to; a route is the URL's path
@@ -118,6 +126,7 @@ export async function factory(argv: string[], deps: FactoryDeps): Promise<number
   if (command === "approve") return approve(args, deps);
   if (command === "next") return next(args, deps);
   if (command === "board") return board(args, deps);
+  if (command === "update") return update(args, deps);
   if (command !== "loop") {
     deps.stderr(`factory does not know the command "${command}".\n\n${USAGE}`);
     return 2;
@@ -213,6 +222,19 @@ async function next(args: string[], deps: FactoryDeps): Promise<number> {
     const step = await whatIsNext({ siteDir: deps.cwd, tracker, clock: deps.clock ?? systemClock });
     deps.stdout(json ? `${JSON.stringify(step, null, 2)}\n` : formatNextStep(step));
   });
+}
+
+async function update(args: string[], deps: FactoryDeps): Promise<number> {
+  if (args.length > 0) {
+    deps.stderr(`factory update takes nothing after it.\n\n${USAGE}`);
+    return 2;
+  }
+  const { releases } = deps;
+  if (!releases) {
+    deps.stderr("This version of the Factory cannot reach npm, so factory update cannot run.\n");
+    return 1;
+  }
+  return onTracker(deps, (tracker) => runUpdate({ siteDir: deps.cwd, tracker, releases, stdout: deps.stdout }));
 }
 
 /** A step that writes to GitHub: what stops it is printed for the Builder, and running it again finishes it. */

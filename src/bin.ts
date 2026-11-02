@@ -6,6 +6,7 @@ import { Codex } from "./codex.ts";
 import { ConfigError, readAgentCliChoice, type AgentCliName } from "./config.ts";
 import { GitHubTracker } from "./github-tracker.ts";
 import { GoogleCli } from "./google-cli.ts";
+import { NpmReleases } from "./releases.ts";
 
 const ADAPTERS: Record<AgentCliName, () => AgentCli> = {
   "claude-code": () => new ClaudeCode(),
@@ -28,6 +29,7 @@ process.exitCode = await factory(process.argv.slice(2), {
   cwd: process.cwd(),
   agentCli,
   tracker: new GitHubTracker({ cwd: process.cwd() }),
+  releases: new NpmReleases({ cwd: process.cwd() }),
   openBrowser: openInBrowser,
   stdout: (text) => process.stdout.write(text),
   stderr: (text) => process.stderr.write(text),

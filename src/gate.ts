@@ -1,4 +1,5 @@
 import { git, gitSucceeds } from "./git.ts";
+import { movedPins } from "./pins.ts";
 import { runShell } from "./shell.ts";
 
 /** A green gate names the commit it tested, so that exact commit is what gets merged. */
@@ -9,8 +10,8 @@ const OUTPUT_TAIL_LINES = 30;
 /**
  * The gate the script decides, not the model: the session committed something
  * of its own on the Ticket's branch (a merge that only catches up with the
- * integration branch is not work), on top of the integration branch, the Site's test
- * command is green, and after the tests nothing is left uncommitted.
+ * integration branch is not work), on top of the integration branch, moving no pinned
+ * version, the Site's test command is green, and after the tests nothing is left uncommitted.
  */
 export async function runGate(
   worktree: string,
@@ -27,6 +28,14 @@ export async function runGate(
     return {
       passed: false,
       reason: `The work does not build on \`${integration}\`, so it cannot be fast-forwarded into it.`,
+    };
+  }
+
+  const moved = await movedPins(worktree, base, "HEAD");
+  if (moved.length > 0) {
+    return {
+      passed: false,
+      reason: `This work changes ${moved.join(" and ")}. Pinned versions move only through the pull request of \`factory update\`, so put them back.`,
     };
   }
 

@@ -136,6 +136,7 @@ export class FakeTracker implements Tracker {
   }
 
   async pullRequestFrom(head: string): Promise<PullRequest | undefined> {
+    this.#needsLogin();
     const found = this.pullRequests.find((pr) => pr.head === head && pr.state === "open");
     return found && { number: found.number, url: found.url, body: found.body };
   }

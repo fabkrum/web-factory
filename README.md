@@ -36,7 +36,7 @@ With a design tool, one of three import skills does the fetching: `import-stitch
 
 The skill shows the Builder the result and explains what approving means. `factory design approve <spec>` is the only way a Spec's Tickets reach the Build Stage; it refuses a handoff that does not stand, was made for another Spec, or has uncommitted changes. Asking for changes means changing the files and running `factory design <spec>` again, and the Spec stays in the Design Stage. The handoff lives on the base branch, because every Ticket starts from there.
 
-The Review check `code/design` runs on every Ticket: DESIGN.md's lint and contrast, `tokens.json` still matching what DESIGN.md generates, a screenshot for every route in `source.json`, and no file of the Site being a whole copy of tool code in `design/reference` (a reworked copy goes unseen). It is reported as not run on a Site that never had a handoff. The DESIGN.md format version is pinned in `src/design-handoff.ts`, and the `@google/design.md` package at one exact version in `package.json`; `factory update` will move them on purpose.
+The Review check `code/design` runs on every Ticket: DESIGN.md's lint and contrast, `tokens.json` still matching what DESIGN.md generates, a screenshot for every route in `source.json`, and no file of the Site being a whole copy of tool code in `design/reference` (a reworked copy goes unseen). It is reported as not run on a Site that never had a handoff. The DESIGN.md format version is pinned in `src/design-handoff.ts`, and the `@google/design.md` package at one exact version in `package.json`; `factory update` moves them on purpose.
 
 ## Approve
 
@@ -53,6 +53,14 @@ The `next` skill runs `factory next`, which reads the board and names exactly on
 `npm run board` (or `factory board`) opens a local page drawn like the workshop diagram: one column per Stage, Decision stages blue, Automatic stages green. Every open Request and Ticket sits in the column of its Stage label, with its attempt count, the failing Review check, the reason in plain words and the one next action. A Ticket parked on another machine shows too: its park comment carries the reason and the attempt count. A Ticket waiting on a rate limit shows as waiting, with its resume time. The page reloads itself every 30 seconds, except while you read a whole reason, and the board stays open until you press Ctrl+C.
 
 In a Codespace the command prints the address of the forwarded port; open that one. The board listens on port 4400 on your own machine only; `--port` picks another port, and `--json` prints the board's data once instead.
+
+## Updating
+
+`factory update` brings the newest Factory into the Site as a pull request the Builder approves by merging it: new or changed skills, Review checks, Modern Web Guidance and the DESIGN.md format version. It is the one thing that does not travel the Pipeline, because it carries the Factory, not a change to the Site.
+
+The Site pins its Factory exactly in `package.json`; the Review checks and the DESIGN.md format version live in the Factory, so that one pin holds them too, and Modern Web Guidance is pinned by its vendored files. The command works from what is on GitHub, in a throwaway worktree, and pushes only the branch `factory-update`, so the Builder's folder and base branch stay as they are until the merge. The pull request lists what changed. Between the release the Site is on and the newest one, only the files that release changed come over; a file the Site changed itself and the release changed too (such as `AGENTS.md`, or a skill) stays as the Site has it and is listed. Running it again finds the open pull request; a newer release moves that same pull request on, and replaces any commit made by hand on that branch. If the DESIGN.md format moved, the pull request says that `design/DESIGN.md` must be rewritten, since its Review check fails until then. The Ticket loop's gate refuses a Ticket that moves a pin, so pins move only through this pull request.
+
+The facts each release pins are in `packages/create-web-factory/release.json`, published with the starter; a test keeps them equal to the code. The update reads the Site's first files from the starter package at the pinned version and at the newest one, on npm.
 
 ## Development
 
