@@ -18,7 +18,11 @@ const REPOSITORY = resolve(import.meta.dirname, "..", "..");
 const SAMPLE = join(REPOSITORY, "test", "fixtures", "sample-spec");
 const TEMPLATE = join(REPOSITORY, "packages", "create-web-factory", "template");
 
-/** Longer than this the nightly run does not wait out a rate limit: its job would be stopped without a report. */
+/**
+ * All the waiting one nightly run does on rate limits, added up. A limit that keeps coming back
+ * is retried without end, so past this total the run stops; otherwise the job's timeout of 120
+ * minutes would cancel it without a report. The total leaves that timeout room for the sessions.
+ */
 const RATE_LIMIT_PATIENCE_MS = 30 * 60 * 1000;
 
 interface SupportedCli {
@@ -81,9 +85,10 @@ export function buildSampleTicket(cwd: string): void {
   );
 }
 
-/** The real clock, except that a wait the nightly run cannot afford ends the run with the reason. */
+/** The real clock, except that a wait the nightly run cannot afford ends the run with the reason. One clock per run: it adds up the waits. */
 export class PatientClock implements Clock {
   readonly #clock: Clock;
+  #waitedMs = 0;
 
   constructor(clock: Clock = systemClock) {
     this.#clock = clock;
@@ -94,9 +99,12 @@ export class PatientClock implements Clock {
   }
 
   async sleep(ms: number): Promise<void> {
-    if (ms > RATE_LIMIT_PATIENCE_MS) {
-      throw new Error(`The Agent CLI's rate limit lifts in ${Math.ceil(ms / 60_000)} minutes, longer than a nightly run waits (${RATE_LIMIT_PATIENCE_MS / 60_000} minutes).`);
+    if (this.#waitedMs + ms > RATE_LIMIT_PATIENCE_MS) {
+      throw new Error(
+        `The Agent CLI's rate limit lifts in ${Math.ceil(ms / 60_000)} minutes. This run has already waited ${Math.ceil(this.#waitedMs / 60_000)} minutes, and a nightly run waits ${RATE_LIMIT_PATIENCE_MS / 60_000} minutes in total.`,
+      );
     }
+    this.#waitedMs += ms;
     await this.#clock.sleep(ms);
   }
 }

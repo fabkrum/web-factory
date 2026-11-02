@@ -105,6 +105,29 @@ describe("the sample Spec", () => {
     expect(run).toHaveProperty("reason", expect.stringContaining("300 minutes"));
     expect(clock.sleeps).toEqual([]);
   });
+
+  it("stops with the reason when short rate limits keep coming back", async () => {
+    const clock = new FakeClock();
+    const limited = () => ({ kind: "rate-limited" as const, until: new Date(clock.now().getTime() + 15 * 60_000) });
+    const agentCli = new FakeAgentCli(limited, limited, limited);
+
+    const run = await runSampleSpec({ agentCli, reviewSite: everyCheckPasses, clock: new PatientClock(clock) });
+
+    expect(run.outcome).toBe("stopped");
+    expect(run).toHaveProperty("reason", expect.stringContaining("already waited 30 minutes"));
+    expect(clock.sleeps).toEqual([15 * 60_000, 15 * 60_000]);
+  });
+
+  it("adds up the waits of the Build session and the code review", async () => {
+    const clock = new FakeClock();
+    const limited = () => ({ kind: "rate-limited" as const, until: new Date(clock.now().getTime() + 15 * 60_000) });
+    const agentCli = new FakeAgentCli(limited, ({ cwd }) => buildSampleTicket(cwd)).reviewing(limited, limited);
+
+    const run = await runSampleSpec({ agentCli, reviewSite: everyCheckPasses, clock: new PatientClock(clock) });
+
+    expect(run.outcome).toBe("stopped");
+    expect(clock.sleeps).toEqual([15 * 60_000, 15 * 60_000]);
+  });
 });
 
 describe("the nightly run of one Agent CLI", () => {
