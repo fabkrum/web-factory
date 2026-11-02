@@ -204,12 +204,11 @@ describe("the nightly workflow", () => {
     expect(job).toMatch(/timeout-minutes: \d+/);
   });
 
-  it("gives no workflow that a pull request starts an Agent CLI's secret", () => {
-    const secrets = Object.values(SUPPORTED_CLIS).map(({ secret }) => secret);
+  it("gives no workflow that a pull request starts any secret", () => {
     for (const file of readdirSync(workflows)) {
       const text = readFileSync(join(workflows, file), "utf8");
       if (!/pull_request/.test(triggers(text))) continue;
-      for (const secret of secrets) expect(text, file).not.toContain(`secrets.${secret}`);
+      expect(text, file).not.toMatch(/secrets\./);
     }
   });
 });

@@ -119,6 +119,14 @@ describe("npm create web-factory", () => {
       expect(read(site, "THIRD-PARTY-NOTICES.md")).toMatch(/Modern Web Guidance[\s\S]*0\.0\.196[\s\S]*Apache License 2\.0/);
     });
 
+    it("credits every skill adapted from Matt Pocock's and carries the MIT licence in full", () => {
+      const notices = read(site, "THIRD-PARTY-NOTICES.md");
+      for (const skill of ["next", "kickoff", "request", "spec", "design", "approve"]) expect(notices).toContain(`\`${skill}\``);
+      expect(notices).toContain("Copyright (c) 2026 Matt Pocock");
+      expect(notices).toContain("Permission is hereby granted, free of charge");
+      expect(notices).toContain('THE SOFTWARE IS PROVIDED "AS IS"');
+    });
+
     it("runs the vendored Modern Web Guidance itself, never a newer version from npm", () => {
       const skill = read(site, ".agents/skills/modern-web-guidance/SKILL.md");
       expect(skill).not.toContain("@latest");
