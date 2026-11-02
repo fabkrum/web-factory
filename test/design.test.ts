@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { lintDesign, screenshotFile } from "../src/design-handoff.ts";
 import { copyFixtureRepo, type FixtureRepo } from "./harness/fixture-repo.ts";
 import { serveFixtureSite, type ServedSite } from "./harness/fixture-site.ts";
 import { FakeAgentCli } from "./harness/fake-agent-cli.ts";
@@ -93,6 +94,53 @@ describe("factory design, the no-tool path", () => {
     expect(run.stderr).toMatch(/too hard to read.*1\.\d+:1/);
     expect(existsSync(`${site}/design/tokens.json`)).toBe(false);
     expect(git(site, "ls-files", "design")).toBe("");
+  });
+
+  it("refuses see-through text or background in every way of writing a color, and changes nothing", async () => {
+    for (const color of ["#00000010", "#1A1C1E00", "#0008", "rgba(0, 0, 0, 0.5)", "rgb(0 0 0 / 50%)", "hsl(0 0% 0% / 0.2)", "oklch(0.2 0 0 / 0.5)", "transparent"]) {
+      expect(lintDesign(DESIGN(color)).map((failure) => failure.location), color).toEqual(["design/DESIGN.md at components.page"]);
+      const background = DESIGN().replace('surface: "#FFFFFF"', `surface: "${color}"`);
+      expect(lintDesign(background).map((failure) => failure.reason), color).toContainEqual(expect.stringMatching(/backgroundColor .* is see-through/));
+    }
+    expect(lintDesign(DESIGN("#000000FF"))).toEqual([]);
+
+    const { site, tracker, spec } = siteInDesign({ design: DESIGN("#00000010") });
+    const run = await runFactory(["design", String(spec)], { cwd: site, tracker });
+    expect(run.exitCode).toBe(1);
+    expect(run.stderr).toMatch(/textColor #00000010 is see-through/);
+    expect(existsSync(`${site}/design/tokens.json`)).toBe(false);
+  });
+
+  it("does not count a see-through pair as a measured one, whatever else the component holds", () => {
+    const failures = lintDesign(DESIGN().replace('primary: "#1A1C1E"', 'primary: "#1A1C1E00"'));
+    expect(failures.map((failure) => failure.reason)).toEqual([expect.stringMatching(/see-through/)]);
+  });
+
+  it("gives every route a screenshot of its own, also where routes differ only in punctuation or case", () => {
+    const routes = ["/", "/home", "/_home", "/a/b.html", "/a-b.html", "/a+b.html", "/a b.html", "/a_b.html", "/a_2f_b.html", "/Menu.html", "/menu.html", "/a%2Fb.html", "/a%2fb.html"];
+    const files = routes.map((route) => screenshotFile(route).toLowerCase());
+    expect(new Set(files).size).toBe(routes.length);
+    expect(screenshotFile("/")).toBe("design/screenshots/home.png");
+    expect(screenshotFile("/menu.html")).toBe("design/screenshots/menu.html.png");
+  });
+
+  it("commits one screenshot per route when the sample's routes would once have shared a file", async () => {
+    const { site, tracker, spec } = siteInDesign();
+    const page = (title: string) => `<!doctype html><html lang="en"><title>${title}</title><h1>${title}</h1></html>`;
+    writeFile(site, "design/sample/index.html", `<!doctype html><html lang="en"><title>Bakery</title><h1>Bakery</h1><a href="/home/">Home</a><a href="/a/b.html">One</a><a href="/a-b.html">Two</a></html>`);
+    writeFile(site, "design/sample/home/index.html", page("Another home, which is long enough to look different"));
+    writeFile(site, "design/sample/a/b.html", page("One"));
+    writeFile(site, "design/sample/a-b.html", page("Two, with quite a different and longer title"));
+
+    const run = await runFactory(["design", String(spec)], { cwd: site, tracker });
+    expect(run.exitCode, run.stderr).toBe(0);
+
+    const { routes } = JSON.parse(readFileSync(`${site}/design/source.json`, "utf8")) as { routes: string[] };
+    expect([...routes].sort()).toEqual(["/", "/a-b.html", "/a/b.html", "/home"]);
+    const files = routes.map(screenshotFile);
+    expect(committed(site)).toEqual(expect.arrayContaining(files));
+    const pictures = files.map((file) => readFileSync(`${site}/${file}`).toString("base64"));
+    expect(new Set(pictures).size).toBe(routes.length);
   });
 
   it("refuses a DESIGN.md with no text and background pair, whose contrast nothing could measure", async () => {
@@ -263,6 +311,14 @@ describe("the code/design Review check", () => {
     expect(exitCode).toBe(1);
     expect(failures).toHaveLength(1);
     expect(failures[0]!.reason).toMatch(/too hard to read/);
+    expect(failures[0]!.location).toBe("design/DESIGN.md at components.page");
+  });
+
+  it("fails see-through text, which the linter's contrast rule cannot measure", async () => {
+    const { exitCode, failures } = await check("design-see-through-text");
+    expect(exitCode).toBe(1);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]!.reason).toMatch(/textColor #00000010 is see-through/);
     expect(failures[0]!.location).toBe("design/DESIGN.md at components.page");
   });
 

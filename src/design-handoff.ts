@@ -1,4 +1,4 @@
-import { DtcgEmitterHandler, lint, type DesignSystemState, type LintReport } from "@google/design.md/linter";
+import { DtcgEmitterHandler, lint, type DesignSystemState, type LintReport, type ResolvedColor } from "@google/design.md/linter";
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -32,9 +32,15 @@ export interface Provenance {
   routes: string[];
 }
 
-/** The reference screenshot of a route: `/` is home.png and `/menu.html` is menu.html.png. */
+/**
+ * The reference screenshot of a route: `/` is home.png and `/menu.html` is menu.html.png. Every
+ * route gets a file of its own, also on a disk that ignores case: anything but lowercase letters,
+ * digits, dots and hyphens is written as its code between underscores, so `/a/b.html` is
+ * a_2f_b.html.png, and `/home` is _home.png because home.png belongs to `/`.
+ */
 export function screenshotFile(route: string): string {
-  const name = route === "/" ? "home" : route.slice(1).replace(/[^a-zA-Z0-9.-]+/g, "-");
+  const escaped = route.slice(1).replace(/[^a-z0-9.-]/gu, (char) => `_${char.codePointAt(0)!.toString(16)}_`);
+  const name = route === "/" ? "home" : route === "/home" ? "_home" : escaped;
   return `${SCREENSHOT_FOLDER}/${name}.png`;
 }
 
@@ -57,10 +63,32 @@ function readable(report: LintReport): Failure[] {
   return failures;
 }
 
+function isColor(value: unknown): value is ResolvedColor {
+  return typeof value === "object" && value !== null && "type" in value && value.type === "color";
+}
+
+function isSeeThrough(color: ResolvedColor): boolean {
+  return (color.a ?? 1) < 1;
+}
+
+/** The contrast rule ignores a color's alpha, so it would measure see-through text as if it were solid. */
+function seeThroughFailures({ components }: DesignSystemState): Failure[] {
+  const failures: Failure[] = [];
+  for (const [name, { properties }] of components) {
+    for (const property of ["textColor", "backgroundColor"]) {
+      const color = properties.get(property);
+      if (isColor(color) && isSeeThrough(color)) {
+        failures.push({ reason: `The ${property} ${color.hex} is see-through, so nobody can say how readable this text is: that depends on what lies behind it. Use a solid color here.`, location: `${DESIGN_FILE} at components.${name}` });
+      }
+    }
+  }
+  return failures;
+}
+
 /** The contrast rule only sees components with both colors, so a design with none would pass unmeasured. */
 function hasContrastPair({ components }: DesignSystemState): boolean {
-  const isColor = (value: unknown) => typeof value === "object" && value !== null && "type" in value && value.type === "color";
-  return [...components.values()].some(({ properties }) => isColor(properties.get("backgroundColor")) && isColor(properties.get("textColor")));
+  const isSolid = (value: unknown) => isColor(value) && !isSeeThrough(value);
+  return [...components.values()].some(({ properties }) => isSolid(properties.get("backgroundColor")) && isSolid(properties.get("textColor")));
 }
 
 /** What is wrong with a DESIGN.md's text: its format version, its lint and its contrast. */
@@ -71,9 +99,9 @@ export function lintDesign(design: string): Failure[] {
     return [{ reason: `DESIGN.md ${found}, and this Factory is pinned to version ${DESIGN_FORMAT_VERSION}. Put \`version: ${DESIGN_FORMAT_VERSION}\` in its front matter; a newer format arrives through factory update.`, location: DESIGN_FILE }];
   }
   const report = lint(design);
-  const failures = readable(report);
+  const failures = [...readable(report), ...seeThroughFailures(report.designSystem)];
   if (failures.length === 0 && !hasContrastPair(report.designSystem)) {
-    failures.push({ reason: "DESIGN.md names no component with both a backgroundColor and a textColor, so its contrast cannot be checked and an unreadable palette would go unseen. Add at least the Site's main text and button as components.", location: DESIGN_FILE });
+    failures.push({ reason: "DESIGN.md names no component with both a solid backgroundColor and a solid textColor, so its contrast cannot be checked and an unreadable palette would go unseen. Add at least the Site's main text and button as components.", location: DESIGN_FILE });
   }
   return failures;
 }
