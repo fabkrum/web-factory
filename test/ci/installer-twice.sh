@@ -29,5 +29,9 @@ grep -q "Nothing to do" "$work/second-output"
 test ! -e "$HOME/.web-factory/unfinished"
 
 test -z "$(git -C my-site status --porcelain)"
+if [ "$(uname -s)" = Linux ] && [ "$AGENT" = claude-code ]; then
+  bwrap --version
+  socat -V >/dev/null
+fi
 PATH="$HOME/.web-factory/tools/node/bin:$PATH" my-site/node_modules/.bin/factory --help >/dev/null
 echo "The installer ran twice on $(uname -s) with $AGENT, and the second run changed nothing."
