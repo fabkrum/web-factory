@@ -1,0 +1,8 @@
+<canvas id="0:1" name="Site" x="0" y="0" width="3000" height="900">
+  <frame id="1:2" name="Landing page" x="0" y="0" width="1280" height="800">
+    <frame id="1:3" name="Hero" x="0" y="0" width="1280" height="400">
+      <text id="1:4" name="Title" x="10" y="10" width="300" height="40" />
+    </frame>
+  </frame>
+  <frame id="1:9" name="Prices &amp; hours" x="1400" y="0" width="1280" height="800" />
+</canvas>

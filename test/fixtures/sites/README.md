@@ -47,3 +47,7 @@ for, `no-lockfile` has no lockfile at all, and `pnpm-lockfile` and
 instead. The advisories check reports a Site locked by any package manager other
 than npm (pnpm, Yarn, Bun, Deno) as not run, and fails only a Site with no
 lockfile.
+
+The `design-*` Site repositories in `../repos` carry a Design handoff in `design/`
+for the `code/design` Review check: `design-clean` stands, and each of the others
+carries one defect, named by its folder.

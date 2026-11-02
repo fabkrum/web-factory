@@ -1,0 +1,23 @@
+Modern Web Guidance
+===================
+
+This folder is a vendored copy of the `skills/modern-web-guidance` folder of the
+npm package modern-web-guidance, version 0.0.196 (skill version
+2026_10_16-6654652b): https://github.com/GoogleChrome/modern-web-guidance
+
+Copyright the Modern Web Guidance authors. Licensed under the Apache License,
+Version 2.0; see LICENSE in this folder. THIRD_PARTY_NOTICES in this folder is the
+package's own list of what it bundles, with those licences.
+
+The Site's own licence, and the web-factory MIT licence, do not extend to this folder.
+
+Changes made to the upstream files:
+
+- SKILL.md runs the tool from this folder, with DISABLE_TELEMETRY=1, instead of
+  fetching the latest version with npx, so that a Site stays on the version it pins,
+  works without network in a sandbox and sends no usage data. Its section "Using npx
+  / pnpx" is replaced by "Running the vendored copy" to match.
+- LICENSE and THIRD_PARTY_NOTICES are copied in from the package's root, and this
+  NOTICE is added.
+
+Every other file is unchanged.

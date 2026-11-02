@@ -1,16 +1,21 @@
 import { git, gitSucceeds } from "./git.ts";
+import { movedPins } from "./pins.ts";
 import { runShell } from "./shell.ts";
 
-/** A green gate names the commit it tested, so that exact commit is what gets merged. */
-export type GateResult = { passed: true; head: string } | { passed: false; reason: string };
+/**
+ * A green gate names the commit it tested, so that exact commit is what gets merged,
+ * and says what the red run said when the tests were only green on the rerun.
+ */
+export type GateResult = { passed: true; head: string; flaky?: string } | { passed: false; reason: string };
 
 const OUTPUT_TAIL_LINES = 30;
 
 /**
  * The gate the script decides, not the model: the session committed something
  * of its own on the Ticket's branch (a merge that only catches up with the
- * integration branch is not work), on top of the integration branch, the Site's test
- * command is green, and after the tests nothing is left uncommitted.
+ * integration branch is not work), on top of the integration branch, moving no pinned
+ * version, the Site's test command is green (a red run gets one rerun), and after the tests
+ * nothing is left uncommitted.
  */
 export async function runGate(
   worktree: string,
@@ -30,14 +35,16 @@ export async function runGate(
     };
   }
 
-  const tests = await runShell(worktree, testCommand);
-  if (tests.exitCode !== 0) {
-    const tail = tests.output.trimEnd().split("\n").slice(-OUTPUT_TAIL_LINES).join("\n");
+  const moved = await movedPins(worktree, base, "HEAD");
+  if (moved.length > 0) {
     return {
       passed: false,
-      reason: `The Site's test command \`${testCommand}\` is red (exit code ${tests.exitCode}).${tail ? `\n\n${fence(tail)}` : ""}`,
+      reason: `This work changes ${moved.join(" and ")}. Pinned versions move only through the pull request of \`factory update\`, so put them back.`,
     };
   }
+
+  const tests = await runTests(worktree, testCommand);
+  if (!tests.green) return { passed: false, reason: tests.reason };
 
   // Checked after the tests, so a file the tests leave behind counts too.
   const dirty = await git(worktree, "status", "--porcelain");
@@ -56,7 +63,31 @@ export async function runGate(
     };
   }
 
-  return { passed: true, head: await git(worktree, "rev-parse", "HEAD") };
+  const head = await git(worktree, "rev-parse", "HEAD");
+  return tests.flaky === undefined ? { passed: true, head } : { passed: true, head, flaky: tests.flaky };
+}
+
+type TestRun = { green: true; flaky?: string } | { green: false; reason: string };
+
+/**
+ * Runs the Site's test command, and once more when it is red: green on the rerun
+ * is flaky, not a failure, and the result keeps what the red run said.
+ */
+async function runTests(cwd: string, testCommand: string): Promise<TestRun> {
+  const first = await runShell(cwd, testCommand);
+  if (first.exitCode === 0) return { green: true };
+  const red = `The Site's test command \`${testCommand}\` is red (exit code ${first.exitCode}).${tailOf(first.output)}`;
+  const again = await runShell(cwd, testCommand);
+  if (again.exitCode === 0) return { green: true, flaky: red };
+  return {
+    green: false,
+    reason: `The Site's test command \`${testCommand}\` is red, and red again on the rerun (exit code ${again.exitCode}).${tailOf(again.output)}`,
+  };
+}
+
+function tailOf(output: string): string {
+  const tail = output.trimEnd().split("\n").slice(-OUTPUT_TAIL_LINES).join("\n");
+  return tail ? `\n\n${fence(tail)}` : "";
 }
 
 function fence(text: string): string {

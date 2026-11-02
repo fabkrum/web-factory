@@ -7,6 +7,10 @@ export interface ContractSubject {
   tracker: Tracker;
   /** Pushes a branch with a commit of its own to the Site's remote; returns the base it can merge into. */
   pushBranch(name: string): Promise<string>;
+  /** The Builder presses the merge button on a pull request. */
+  mergeByHand(pullRequest: number): Promise<void>;
+  /** The Builder closes a pull request without merging it. */
+  closePullRequestByHand(pullRequest: number): Promise<void>;
   /** The Builder reopens an issue by hand. */
   reopenByHand(issue: number): Promise<void>;
   createLabel(name: string): Promise<void>;
@@ -43,6 +47,27 @@ export function trackerContract(
         { number: second, title: `Ticket B ${run}`, body: "", state: "open", labels: ["stage:build"], blockedBy: [] },
       ]);
       expect(await tracker.getIssue(spec)).toMatchObject({ number: spec, title: `Spec ${run}`, state: "open", labels: ["stage:spec"] });
+    });
+
+    it("rewrites an issue when a Request becomes its Spec, and it stays the same issue", async () => {
+      const { tracker } = await subject();
+      const request = await tracker.createIssue({ title: `Request ${run}`, body: "My words.", stage: "request" });
+
+      await tracker.updateIssue(request, { title: `Spec ${run}`, body: "Worked out." });
+
+      expect(await tracker.getIssue(request)).toMatchObject({ number: request, title: `Spec ${run}`, body: "Worked out.", state: "open", labels: ["stage:request"] });
+    });
+
+    it("takes a dropped Ticket out of its Spec and closes it", async () => {
+      const { tracker } = await subject();
+      const spec = await tracker.createIssue({ title: `Spec ${run}`, body: "", stage: "spec" });
+      const kept = await tracker.createIssue({ title: `Kept ${run}`, body: "", stage: "spec", parent: spec });
+      const dropped = await tracker.createIssue({ title: `Dropped ${run}`, body: "", stage: "spec", parent: spec });
+
+      await tracker.removeTicket(spec, dropped);
+
+      expect((await tracker.ticketsOf(spec)).map((ticket) => ticket.number)).toEqual([kept]);
+      expect((await tracker.getIssue(dropped)).state).toBe("closed");
     });
 
     it("records blockers and shows them on the blocked Ticket", async () => {
@@ -126,6 +151,55 @@ export function trackerContract(
       expect(opened.url).toMatch(new RegExp(`/pull/${opened.number}$`));
       expect(await tracker.pullRequestFrom(head)).toEqual(opened);
       expect(await tracker.pullRequestFrom(`loop/never-pushed-${run}`)).toBeUndefined();
+    });
+
+    it("rewrites what an open pull request says", async () => {
+      const { tracker, pushBranch } = await subject();
+      const head = `loop/rewritten-${run}`;
+      const base = await pushBranch(head);
+      const { number } = await tracker.openPullRequest({ head, base, title: `Rewritten ${run}`, body: "Preview: https://old.example" });
+
+      await tracker.updatePullRequest(number, { body: "Preview: https://new.example" });
+
+      expect((await tracker.pullRequestFrom(head))?.body).toBe("Preview: https://new.example");
+    });
+
+    it("tells a merged pull request from an open one and from one closed without merging", async () => {
+      const { tracker, pushBranch, mergeByHand, closePullRequestByHand } = await subject();
+      const merged = `loop/merged-${run}`;
+      const merging = await tracker.openPullRequest({ head: merged, base: await pushBranch(merged), title: `Merged ${run}`, body: "Read it." });
+      const dropped = `loop/dropped-${run}`;
+      const dropping = await tracker.openPullRequest({ head: dropped, base: await pushBranch(dropped), title: `Dropped ${run}`, body: "" });
+      expect(await tracker.mergedPullRequestFrom(merged)).toBeUndefined();
+
+      await mergeByHand(merging.number);
+      await closePullRequestByHand(dropping.number);
+
+      expect(await tracker.mergedPullRequestFrom(merged)).toEqual(merging);
+      expect(await tracker.pullRequestFrom(merged)).toBeUndefined();
+      expect(await tracker.mergedPullRequestFrom(dropped)).toBeUndefined();
+      expect(await tracker.pullRequestFrom(dropped)).toBeUndefined();
+    });
+
+    it("lists the open issues with each Ticket's Spec, without closed ones or pull requests", async () => {
+      const { tracker, pushBranch } = await subject();
+      const spec = await tracker.createIssue({ title: `Listed Spec ${run}`, body: "", stage: "build" });
+      const ticket = await tracker.createIssue({ title: `Listed Ticket ${run}`, body: "", stage: "build", parent: spec });
+      const closed = await tracker.createIssue({ title: `Listed closed ${run}`, body: "", stage: "request" });
+      const later = await tracker.createIssue({ title: `Listed later ${run}`, body: "", stage: "request" });
+      await tracker.close(closed);
+      const head = `loop/listed-${run}`;
+      const base = await pushBranch(head);
+      const pull = await tracker.openPullRequest({ head, base, title: `Listed pull ${run}`, body: "" });
+
+      const open = await tracker.openIssues();
+      const numbers = open.map((issue) => issue.number);
+
+      expect(numbers).toEqual(expect.arrayContaining([spec, ticket, later]));
+      expect(numbers).not.toContain(closed);
+      expect(numbers).not.toContain(pull.number);
+      expect(open.find((issue) => issue.number === ticket)).toMatchObject({ title: `Listed Ticket ${run}`, labels: ["stage:build"], parent: spec, url: expect.stringMatching(new RegExp(`/issues/${ticket}$`)) });
+      expect(open.find((issue) => issue.number === spec)?.parent).toBeUndefined();
     });
 
     it("refuses an issue it does not have", async () => {

@@ -1,3 +1,5 @@
+import { ConfigError } from "../config.ts";
+import { ReviewError } from "./check.ts";
 import type { ReviewReport } from "./review.ts";
 
 /** A check with more failures than this shows the first ones and counts the rest. */
@@ -35,6 +37,26 @@ export function formatReport(report: ReviewReport): string {
       : `The Site did not pass: ${failed} Review ${failed === 1 ? "check" : "checks"} failed. Fix what the reasons above say, then run the review again.`,
   );
   return `${lines.join("\n")}\n`;
+}
+
+/** What failed in a review, for a Build session or a park comment: each failing check by name, with where and why. */
+export function formatFailures(report: ReviewReport): string {
+  const lines: string[] = [];
+  for (const check of report.areas.flatMap((area) => area.checks)) {
+    if (check.passed) continue;
+    lines.push(`The Review check "${check.name}" failed:`);
+    for (const { location, reason } of check.failures.slice(0, SHOWN_PER_CHECK)) lines.push(`- ${location}: ${reason}`);
+    const hidden = check.failures.length - SHOWN_PER_CHECK;
+    if (hidden > 0) lines.push(`- ...and ${hidden} more.`);
+  }
+  return lines.join("\n");
+}
+
+/** One plain-language reason the review could not run, with no stack trace. */
+export function couldNotRun(error: unknown): string {
+  if (error instanceof ReviewError || error instanceof ConfigError) return error.message;
+  const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0];
+  return `The review stopped before it could check your whole Site (${detail}). Check that your Site is still being served, then run the review again.`;
 }
 
 /** One line of a check's detail, indented under it; a reason that spans lines (a test's output) stays indented. */

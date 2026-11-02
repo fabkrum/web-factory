@@ -20,8 +20,22 @@ export function commitFile(dir: string, path: string, content: string, message =
   return git(dir, "rev-parse", "HEAD");
 }
 
+/** A server that answers everything, on the port the Ticket loop gives it. */
+const ANSWERING_SERVER = `node -e "require('http').createServer((q, s) => s.end('ok')).listen(process.env.PORT)"`;
+
+export interface SiteRepoConfig {
+  testCommand: string;
+  maxAttempts?: number;
+  buildCommand?: string;
+  /** Null leaves it out of factory.json, as a Site from before this field would. */
+  serveCommand?: string | null;
+  serveTimeoutMs?: number;
+  localePack?: string;
+}
+
 /** A throwaway Site repository on `main` with its Factory config committed, and a bare `origin` it pushes to. */
-export function createSiteRepo(config: { testCommand: string; maxAttempts?: number }): string {
+export function createSiteRepo({ serveCommand = ANSWERING_SERVER, ...rest }: SiteRepoConfig): string {
+  const config = serveCommand === null ? rest : { ...rest, serveCommand };
   const dir = mkdtempSync(join(tmpdir(), "web-factory-site-"));
   git(dir, "init", "-q", "-b", "main");
   git(dir, "config", "user.name", "Test Builder");
