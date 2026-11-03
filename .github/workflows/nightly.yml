@@ -1,0 +1,104 @@
+# Seam 3: the fixed sample Spec through the Ticket loop, once per supported Agent CLI.
+# Each job reports Pass, the parked reason or why it was skipped, in its log and in the
+# run's summary. A parked or stopped run fails its job; a skipped one does not.
+#
+# It spends real money, so it runs nightly and on demand, and has no pull request trigger:
+# no pull request can reach these secrets. Each job gets only its own, on the one step that
+# needs it, and the checkout keeps no token, so a session has nothing to write to GitHub with.
+#
+# The maintainer sets up once, outside any session:
+#   - CONTRACT_ANTHROPIC_API_KEY, CONTRACT_OPENAI_API_KEY and CONTRACT_GEMINI_API_KEY,
+#     the same secrets as the Agent CLI contract tests;
+#   - CONTRACT_GEMINI_PAID_API_KEY, a paid Gemini API key for Gemini CLI, which no longer
+#     serves free accounts. Without it Gemini CLI is reported as skipped.
+name: Nightly sample Spec
+
+on:
+  schedule:
+    - cron: "43 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  claude-code:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # Claude Code's sandbox on Linux runs commands through bubblewrap and socat.
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap socat
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: The sample Spec on Claude Code
+        run: node test/ci/sample-spec.ts claude-code
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.CONTRACT_ANTHROPIC_API_KEY }}
+
+  codex:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm install -g @openai/codex
+      - name: The sample Spec on Codex
+        run: node test/ci/sample-spec.ts codex
+        env:
+          CODEX_API_KEY: ${{ secrets.CONTRACT_OPENAI_API_KEY }}
+
+  antigravity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # Antigravity CLI is a binary from Google's installer, not an npm package.
+      - run: curl -fsSL -o "$RUNNER_TEMP/install-agy.sh" https://antigravity.google/cli/install.sh
+      - run: bash "$RUNNER_TEMP/install-agy.sh"
+      - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: The sample Spec on Antigravity CLI
+        run: node test/ci/sample-spec.ts antigravity
+        env:
+          GEMINI_API_KEY: ${{ secrets.CONTRACT_GEMINI_API_KEY }}
+
+  gemini:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm install -g @google/gemini-cli
+      - name: The sample Spec on Gemini CLI
+        run: node test/ci/sample-spec.ts gemini
+        env:
+          GEMINI_API_KEY: ${{ secrets.CONTRACT_GEMINI_PAID_API_KEY }}

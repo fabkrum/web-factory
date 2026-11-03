@@ -5,3 +5,5 @@ The Factory does not ship a fixed stack. At the start of every Site the model gu
 ## Consequences
 
 Review checks must measure the built and served Site (a URL), not stack-specific source files. Anything stack-specific, such as the test command, is recorded by the Architecture decision and read by the Ticket loop.
+
+Amended by ADR 0007: in v1 the stack produces static output.

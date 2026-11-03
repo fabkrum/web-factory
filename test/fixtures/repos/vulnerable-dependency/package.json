@@ -1,0 +1,8 @@
+{
+  "name": "fixture-site",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "fixture-lib": "1.1.0"
+  }
+}

@@ -1,0 +1,3 @@
+{
+  "testCommand": "node -e \"console.log('contact form: expected a thank-you message, got nothing'); process.exit(1)\""
+}

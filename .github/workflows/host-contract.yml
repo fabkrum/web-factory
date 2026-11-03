@@ -1,0 +1,49 @@
+# The Firebase adapter's real contract test, against a disposable Firebase project.
+#
+# The maintainer sets it up once, outside any session:
+#   - a throwaway Firebase project with Hosting switched on, named in the repository
+#     variable CONTRACT_FIREBASE_PROJECT (the test publishes to its live site);
+#   - the JSON key of a service account with the Firebase Hosting Admin role on that
+#     project, in the secret CONTRACT_FIREBASE_SERVICE_ACCOUNT.
+# Until both exist the test is skipped: the job log and the run summary say why.
+name: Host contract
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One run at a time: the runs share the disposable project's live site.
+concurrency:
+  group: host-contract
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  firebase:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm install -g firebase-tools
+      - name: Hand Firebase the key, or say why the test is skipped
+        run: |
+          if [ -z "$PROJECT" ] || [ -z "$SERVICE_ACCOUNT" ]; then
+            echo "::notice title=Real Firebase contract skipped::Set the variable CONTRACT_FIREBASE_PROJECT and the secret CONTRACT_FIREBASE_SERVICE_ACCOUNT to run it."
+            exit 0
+          fi
+          printf '%s' "$SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-key.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/firebase-key.json" >> "$GITHUB_ENV"
+        env:
+          PROJECT: ${{ vars.CONTRACT_FIREBASE_PROJECT }}
+          SERVICE_ACCOUNT: ${{ secrets.CONTRACT_FIREBASE_SERVICE_ACCOUNT }}
+      - name: Contract tests against the disposable project
+        run: npx vitest run test/host-contract.test.ts
+        env:
+          WEB_FACTORY_FIREBASE_PROJECT: ${{ vars.CONTRACT_FIREBASE_PROJECT }}

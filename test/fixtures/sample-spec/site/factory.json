@@ -1,0 +1,6 @@
+{
+  "testCommand": "node --test tests/*.mjs",
+  "serveCommand": "node serve.mjs",
+  "sessionTimeoutMs": 600000,
+  "maxAttempts": 3
+}
