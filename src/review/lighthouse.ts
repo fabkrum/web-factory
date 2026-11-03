@@ -174,3 +174,33 @@ function firstNode(details: unknown): { selector?: string; snippet?: string } | 
   }
   return undefined;
 }
+
+/** The audits Measure reads on the live Site, by the name it records them under. */
+const LIVE_AUDITS = { lcp: "largest-contentful-paint", cls: "cumulative-layout-shift", tbt: "total-blocking-time" } as const;
+
+/**
+ * Lighthouse on the live Site after a Publish: the median of each measurement over
+ * LIGHTHOUSE_RUNS runs of the one address. Unlike the Review check it holds nothing to a
+ * budget: Measure compares it with the previous measurement.
+ */
+export async function measureLive(url: URL): Promise<Partial<Record<keyof typeof LIVE_AUDITS, number>>> {
+  const chrome = await launchChrome();
+  try {
+    const runs: Result[] = [];
+    const errors: string[] = [];
+    for (let run = 0; run < LIGHTHOUSE_RUNS; run++) {
+      const lhr = (await lighthouse(url.href, { port: chrome.port, logLevel: "error", onlyAudits: Object.values(LIVE_AUDITS) }))?.lhr;
+      if (lhr?.runtimeError) errors.push(lhr.runtimeError.message);
+      else if (lhr) runs.push(lhr);
+    }
+    if (runs.length === 0) throw new ReviewError(`Lighthouse could not measure the live Site at ${url.href} (${errors[0] ?? "it returned no result"}).`);
+    const medians: Partial<Record<keyof typeof LIVE_AUDITS, number>> = {};
+    for (const [name, audit] of Object.entries(LIVE_AUDITS) as [keyof typeof LIVE_AUDITS, string][]) {
+      const values = runs.map((lhr) => lhr.audits[audit]?.numericValue).filter((value): value is number => typeof value === "number").sort((a, b) => a - b);
+      if (values.length > 0) medians[name] = medianOf(values);
+    }
+    return medians;
+  } finally {
+    await chrome.kill();
+  }
+}

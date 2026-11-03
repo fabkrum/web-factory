@@ -215,6 +215,9 @@ describe("the Firebase adapter", () => {
     expect(workflow).toContain("npx factory publish");
     expect(workflow).toContain("secrets.FIREBASE_SERVICE_ACCOUNT_MY_SITE");
     expect(workflow).not.toMatch(/pull_request/);
+    // Measure after Publish keeps its measurements on an issue and may open a Request.
+    expect(workflow).toContain("issues: write");
+    expect(workflow).toContain("GH_TOKEN: ${{ github.token }}");
   });
 
   it("refuses to connect next to firebase init's own workflow, which would publish a second time", async () => {

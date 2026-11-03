@@ -20,6 +20,8 @@ import { LoopError, runTicketLoop, type ReviewSite } from "./ticket-loop.ts";
 import { HostError, type Host } from "./host.ts";
 import type { FactoryReleases } from "./releases.ts";
 import { NotLoggedInError, type Tracker } from "./tracker.ts";
+import { CruxError, type CruxSource } from "./crux.ts";
+import { measureAfterPublish, runMeasure, type MeasureLab } from "./measure.ts";
 
 export interface FactoryDeps {
   cwd: string;
@@ -35,6 +37,10 @@ export interface FactoryDeps {
   clock?: Clock;
   /** Runs the Review checks on a Ticket's served build: every one of them, unless a test says otherwise. */
   reviewSite?: ReviewSite;
+  /** Runs Lighthouse on the live Site after a Publish; missing, Publish measures nothing. */
+  measureLab?: MeasureLab;
+  /** The Chrome UX Report; missing when no Google API key is set. */
+  crux?: CruxSource;
   /** Opens an address in the Builder's browser; missing, the Builder opens the printed address. */
   openBrowser?: (url: string) => void;
   /** Ends `factory board`; without it the board runs until the Builder stops the command. */
@@ -55,8 +61,13 @@ export const USAGE = `Usage:
                                   factory.json, and the Stage labels on GitHub
   factory connect-host            Finish connecting the Site's host during Kickoff,
                                   after the kickoff skill's steps on the host's side
-  factory publish                 Publish the Site live; merging into the base branch
-                                  runs this on GitHub
+  factory publish                 Publish the Site live, then measure it with Lighthouse and
+                                  compare with the previous measurement; merging into the
+                                  base branch runs this on GitHub
+  factory measure [<url>]         Check what real Visitors experience on the live Site in the
+                                  Chrome UX Report (needs a Google API key in CRUX_API_KEY)
+                                  and compare with the previous measurement. A measurement
+                                  that got worse opens a new Request with the evidence
   factory request <request-file>  File the Builder's Request as an issue in the Request Stage;
                                   the request skill writes the file
   factory spec <spec-file>        Write the Spec on its Request's issue and file its Tickets
@@ -136,6 +147,7 @@ export async function factory(argv: string[], deps: FactoryDeps): Promise<number
   if (command === "next") return next(args, deps);
   if (command === "board") return board(args, deps);
   if (command === "update") return update(args, deps);
+  if (command === "measure") return measure(args, deps);
   if (command !== "loop") {
     deps.stderr(`factory does not know the command "${command}".\n\n${USAGE}`);
     return 2;
@@ -260,7 +272,7 @@ async function onTracker(deps: FactoryDeps, step: (tracker: Tracker) => Promise<
       deps.stderr(`${LOGIN_NEEDED}\n`);
       return 1;
     }
-    if (error instanceof PipelineError || error instanceof ConfigError || error instanceof ReviewError || error instanceof BoardError) {
+    if (error instanceof PipelineError || error instanceof ConfigError || error instanceof ReviewError || error instanceof BoardError || error instanceof CruxError) {
       deps.stderr(`${error.message}\n`);
       return 1;
     }
@@ -357,8 +369,37 @@ function publish(deps: FactoryDeps): Promise<number> {
     if (branch !== baseBranch) {
       throw new HostError(`Only ${baseBranch} is published, and this is ${branch}: nothing reaches the live Site without the Builder's Approve.`);
     }
-    deps.stdout(`Published: ${await host.publishLive({ siteDir: deps.cwd })}\n`);
+    const live = await host.publishLive({ siteDir: deps.cwd });
+    deps.stdout(`Published: ${live}\n`);
+    await measurePublished(live, deps);
   });
+}
+
+/**
+ * Lighthouse on the live Site after Publish. The Site is live whatever happens here, so a
+ * measurement that cannot run is said, and Publish still succeeds.
+ */
+async function measurePublished(live: string, deps: FactoryDeps): Promise<void> {
+  if (!deps.measureLab) return;
+  if (!deps.tracker) {
+    deps.stderr("The live Site is not measured: this version of the Factory cannot reach GitHub, where measurements are kept.\n");
+    return;
+  }
+  try {
+    await measureAfterPublish({ url: live, measureLab: deps.measureLab, tracker: deps.tracker, clock: deps.clock ?? systemClock, stdout: deps.stdout });
+  } catch (error) {
+    const reason = error instanceof NotLoggedInError ? "nobody is logged in to GitHub, where measurements are kept" : (error as Error).message;
+    deps.stderr(`The Site is published, but measuring it did not finish: ${reason}\n`);
+  }
+}
+
+async function measure(args: string[], deps: FactoryDeps): Promise<number> {
+  const url = args.length === 1 ? webAddress(args[0]!) : undefined;
+  if (args.length > 1 || (args.length === 1 && !url)) {
+    deps.stderr(`factory measure takes at most the live Site's full web address, for example: factory measure https://my-site.web.app\n\n${USAGE}`);
+    return 2;
+  }
+  return onTracker(deps, (tracker) => runMeasure({ url: url?.href, crux: deps.crux, tracker, clock: deps.clock ?? systemClock, stdout: deps.stdout }));
 }
 
 async function loop(spec: number, deps: FactoryDeps): Promise<number> {

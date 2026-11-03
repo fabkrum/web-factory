@@ -73,8 +73,10 @@ concurrency:
   group: publish
   cancel-in-progress: false
 
+# Publish measures the live Site and keeps the measurements on an issue; one that got worse opens a Request.
 permissions:
   contents: read
+  issues: write
 
 jobs:
   publish:
@@ -93,6 +95,7 @@ jobs:
       - run: npx factory publish
         env:
           GOOGLE_APPLICATION_CREDENTIALS: \${{ runner.temp }}/firebase-key.json
+          GH_TOKEN: \${{ github.token }}
 `;
 }
 

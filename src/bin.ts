@@ -9,6 +9,8 @@ import { GitHubTracker } from "./github-tracker.ts";
 import { GoogleCli } from "./google-cli.ts";
 import { isFirebaseHosting } from "./host.ts";
 import { NpmReleases } from "./releases.ts";
+import { CRUX_KEY_VARIABLE, CruxApi } from "./crux.ts";
+import { measureLive } from "./review/lighthouse.ts";
 
 const ADAPTERS: Record<AgentCliName, () => AgentCli> = {
   "claude-code": () => new ClaudeCode(),
@@ -28,6 +30,7 @@ try {
 }
 
 const hostChoice = await readHostChoice(process.cwd());
+const cruxKey = process.env[CRUX_KEY_VARIABLE];
 
 process.exitCode = await factory(process.argv.slice(2), {
   cwd: process.cwd(),
@@ -35,6 +38,8 @@ process.exitCode = await factory(process.argv.slice(2), {
   tracker: new GitHubTracker({ cwd: process.cwd() }),
   host: hostChoice !== undefined && isFirebaseHosting(hostChoice) ? new FirebaseHost() : undefined,
   releases: new NpmReleases({ cwd: process.cwd() }),
+  measureLab: measureLive,
+  crux: cruxKey ? new CruxApi({ key: cruxKey }) : undefined,
   openBrowser: openInBrowser,
   stdout: (text) => process.stdout.write(text),
   stderr: (text) => process.stderr.write(text),

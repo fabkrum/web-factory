@@ -1,0 +1,34 @@
+# The Chrome UX Report adapter's real contract test, against Google's API.
+#
+# The maintainer sets it up once, outside any session: a Google API key with the Chrome UX
+# Report API switched on, in the secret CONTRACT_CRUX_API_KEY. Until it exists the test is
+# skipped: the job log and the run summary say why.
+name: CrUX contract
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  crux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Contract tests against the Chrome UX Report API, or say why they are skipped
+        run: |
+          if [ -z "$CRUX_API_KEY" ]; then
+            echo "::notice title=Real Chrome UX Report contract skipped::Set the secret CONTRACT_CRUX_API_KEY to a Google API key with the Chrome UX Report API switched on to run it."
+            exit 0
+          fi
+          npx vitest run test/crux-contract.test.ts
+        env:
+          CRUX_API_KEY: ${{ secrets.CONTRACT_CRUX_API_KEY }}
