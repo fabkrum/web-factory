@@ -1,5 +1,8 @@
 import type { Gh } from "../../src/github-tracker.ts";
 
+/** Who `gh` is logged in as: the Builder, who owns the repository. */
+const BUILDER = "the-builder";
+
 interface Label {
   name: string;
   color: string;
@@ -81,6 +84,11 @@ export class FakeGitHub {
     const issue = this.#issue(number);
     issue.state = "open";
     issue.timeline.push({ event: "reopened" });
+  }
+
+  /** Someone without write access comments on an issue, as anyone may on a public repository. */
+  commentAsStranger(number: number, body: string, login = "a-stranger"): void {
+    this.#issue(number).timeline.push({ event: "commented", body, actor: { login }, user: { login }, author_association: "NONE" });
   }
 
   /** The Builder creates a label on GitHub. */
@@ -191,7 +199,8 @@ export class FakeGitHub {
     }
     if ((match = route.match(/^POST issues\/(\d+)\/comments$/))) {
       const issue = this.#issue(Number(match[1]));
-      issue.timeline.push({ event: "commented", body: String(body.body) });
+      // gh is logged in as the Builder, who owns the repository.
+      issue.timeline.push({ event: "commented", body: String(body.body), actor: { login: BUILDER }, user: { login: BUILDER }, author_association: "OWNER" });
       return { id: this.#nextId++, body: body.body };
     }
     if ((match = route.match(/^GET issues\/(\d+)\/timeline$/))) {

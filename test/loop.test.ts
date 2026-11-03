@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Tracker } from "../src/tracker.ts";
 import { FakeAgentCli } from "./harness/fake-agent-cli.ts";
@@ -389,6 +390,88 @@ describe("factory loop with two Tickets", () => {
     expect(rerun.exitCode, rerun.stderr).toBe(0);
     expect(tracker.issue(first).state).toBe("closed");
     expect(git(site, "show", `spec/${spec}:index.html`)).toBe("<h1>one</h1>\n<h1>both</h1>");
+  });
+});
+
+describe("the gate and the Site's tests", () => {
+  const PASSING_TEST = 'import { it } from "node:test";\nit("says hello", () => {});\nit("says goodbye", () => {});\n';
+
+  /** A Site whose base already has a test file and a test script, as a Site with tests does. */
+  function siteWithTests(): string {
+    const site = createSiteRepo({ testCommand: "npm test", maxAttempts: 1 });
+    writeFile(site, "package.json", `${JSON.stringify({ name: "a-site", private: true, scripts: { test: "node --test" } }, null, 2)}\n`);
+    writeFile(site, "test/greeting.test.mjs", PASSING_TEST);
+    git(site, "add", "-A");
+    git(site, "commit", "-q", "-m", "Tests");
+    git(site, "push", "-q", "origin", "main");
+    return site;
+  }
+
+  async function loopWhere(session: (cwd: string) => void) {
+    const site = siteWithTests();
+    const { tracker, spec, ticket } = oneTicketSpec();
+    const run = await runFactory(["loop", String(spec)], { cwd: site, agentCli: new FakeAgentCli(({ cwd }) => session(cwd)), tracker });
+    return { site, run, tracker, spec, ticket };
+  }
+
+  it("does not Pass a Ticket that deletes a test file, even with the tests green", async () => {
+    const { site, run, tracker, spec, ticket } = await loopWhere((cwd) => {
+      commitFile(cwd, "index.html", "<h1>hello</h1>\n");
+      git(cwd, "rm", "-q", "test/greeting.test.mjs");
+      git(cwd, "commit", "-q", "-m", "Remove a test");
+    });
+
+    expectNoPass(run.exitCode, tracker, ticket, /deletes the test file `test\/greeting\.test\.mjs`/);
+    expectIntegrationBranchUnchanged(site, spec);
+  });
+
+  it("does not Pass a Ticket that moves a test file where no test runner looks", async () => {
+    const { run, tracker, ticket } = await loopWhere((cwd) => {
+      git(cwd, "mv", "test/greeting.test.mjs", "old-greeting.mjs");
+      git(cwd, "commit", "-q", "-m", "Move a test away");
+    });
+
+    expectNoPass(run.exitCode, tracker, ticket, /deletes the test file `test\/greeting\.test\.mjs`/);
+  });
+
+  it.each([
+    ["it.skip", 'it.skip("says goodbye", () => {});'],
+    ["test.todo", 'test.todo("says goodbye");'],
+    ["describe.only", 'describe.only("greeting", () => {});'],
+    ["xit", 'xit("says goodbye", () => {});'],
+    ["a skip option", 'it("says goodbye", { skip: true }, () => {});'],
+    ["pytest", "@pytest.mark.skip(reason='later')"],
+  ])("does not Pass a Ticket that adds %s to a test", async (_name, line) => {
+    const { run, tracker, ticket } = await loopWhere((cwd) => commitFile(cwd, "test/greeting.test.mjs", `${PASSING_TEST}${line}\n`));
+
+    expectNoPass(run.exitCode, tracker, ticket, /skips or narrows the Site's tests in `test\/greeting\.test\.mjs`/);
+    expect(tracker.issue(ticket).comments.join("\n")).toContain(line);
+  });
+
+  it("does not Pass a Ticket that changes the Site's test script or test command", async () => {
+    const script = await loopWhere((cwd) =>
+      commitFile(cwd, "package.json", `${JSON.stringify({ name: "a-site", private: true, scripts: { test: "true" } }, null, 2)}\n`),
+    );
+    expectNoPass(script.run.exitCode, script.tracker, script.ticket, /changes the Site's test script `test` in package\.json/);
+
+    const command = await loopWhere((cwd) => {
+      const config = JSON.parse(readFileSync(join(cwd, "factory.json"), "utf8"));
+      commitFile(cwd, "factory.json", `${JSON.stringify({ ...config, testCommand: "true" }, null, 2)}\n`);
+    });
+    expectNoPass(command.run.exitCode, command.tracker, command.ticket, /changes the Site's test command in factory\.json/);
+  });
+
+  it("lets a Ticket add tests, move them, add scripts beside the test script, and skip nothing", async () => {
+    const { run, tracker, ticket } = await loopWhere((cwd) => {
+      commitFile(cwd, "test/farewell.test.mjs", 'import { it } from "node:test";\nit("says farewell", () => {});\n');
+      git(cwd, "mv", "test/greeting.test.mjs", "test/hello.test.mjs");
+      git(cwd, "commit", "-q", "-m", "Rename a test");
+      commitFile(cwd, "package.json", `${JSON.stringify({ name: "a-site", private: true, scripts: { test: "node --test", build: "true" } }, null, 2)}\n`);
+      commitFile(cwd, "src/intro.js", "export const skipIntro = (it) => it.skip;\n");
+    });
+
+    expect(run.exitCode, tracker.issue(ticket).comments.join("\n")).toBe(0);
+    expect(tracker.issue(ticket).state).toBe("closed");
   });
 });
 

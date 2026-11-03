@@ -22,6 +22,8 @@ export class FakeTracker implements Tracker {
   /** The repository's labels; like GitHub, a label is unique regardless of case. */
   readonly #labels: string[] = [];
   #next = 1;
+  /** Who the fake is logged in as: the Builder, who owns the repository. */
+  static readonly BUILDER = "the-builder";
   /** While true, every call refuses, as GitHub does before the Builder logs in. */
   loggedOut = false;
 
@@ -180,7 +182,14 @@ export class FakeTracker implements Tracker {
   async comment(number: number, body: string): Promise<void> {
     const issue = this.issue(number);
     issue.comments.push(body);
-    issue.history.push({ kind: "comment", body });
+    issue.history.push({ kind: "comment", body, author: FakeTracker.BUILDER, trusted: true });
+  }
+
+  /** Someone without write access comments, as anyone may on a public repository. */
+  async commentAsStranger(number: number, body: string, author = "a-stranger"): Promise<void> {
+    const issue = this.issue(number);
+    issue.comments.push(body);
+    issue.history.push({ kind: "comment", body, author, trusted: false });
   }
 
   async close(number: number): Promise<void> {
