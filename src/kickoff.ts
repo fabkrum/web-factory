@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AGENT_CLIS, CONFIG_FILE, ConfigError, type AgentCliName } from "./config.ts";
 import { AGENTS_FILE, commitRecord, fieldReader, findStackSection, hasSectionHeading, kickoffRecorded, readSkillFile, renderAdr, withStackSection, writeAdr, type Choice } from "./decision-record.ts";
+import { ga4Paths, ga4StackLine, ga4Summary, isMeasurementId, isPublicDir, writeGa4Reporter, type Ga4Choice } from "./ga4.ts";
 import { isFirebaseAppHosting, isFirebaseHosting } from "./host.ts";
 import type { Tracker } from "./tracker.ts";
 
@@ -15,6 +16,8 @@ export interface KickoffDecisions {
   /** `setup` is the chosen host's own setup: required for a host other than Firebase Hosting. */
   host: Choice & { setup?: string };
   commands: { test: string; serve: string; build?: string };
+  /** The Builder's opt-in to send web-vitals to Google Analytics 4; absent when they opted out. */
+  ga4?: Ga4Choice;
 }
 
 /** A Kickoff that stopped for a reason the Builder can read; the message is printed as it is. */
@@ -55,6 +58,7 @@ export function parseDecisions(raw: unknown): KickoffDecisions {
   const { visitorCountries } = location;
   if (!Array.isArray(visitorCountries) || visitorCountries.length === 0) throw new KickoffError("The Kickoff decisions have no location.visitorCountries.");
   if (commands.build !== undefined) text(commands.build, "commands.build");
+  const ga4 = ga4Choice(decisions.ga4);
   const parsed: KickoffDecisions = {
     site: {
       audience: text(site.audience, "site.audience"),
@@ -73,11 +77,27 @@ export function parseDecisions(raw: unknown): KickoffDecisions {
       serve: text(commands.serve, "commands.serve"),
       build: commands.build as string | undefined,
     },
+    ...(ga4 ? { ga4 } : {}),
   };
   if (hasSectionHeading(stackBody(parsed))) {
     throw new KickoffError(`The Kickoff decisions hold a line starting with "## " in the text for the Stack section of ${AGENTS_FILE}, where it would start a new section. Write that text without it; host.setup is the likely place.`);
   }
   return parsed;
+}
+
+/** The opt-in to GA4, or undefined when the Builder opted out: no field, null or false. */
+function ga4Choice(value: unknown): Ga4Choice | undefined {
+  if (value === undefined || value === null || value === false) return undefined;
+  const ga4 = record(value, "ga4");
+  const measurementId = text(ga4.measurementId, "ga4.measurementId").trim();
+  if (!isMeasurementId(measurementId)) {
+    throw new KickoffError(`The Kickoff decisions give ${JSON.stringify(measurementId)} as ga4.measurementId; a GA4 measurement ID starts with G-, such as G-AB12CD34EF. The Builder finds it in Google Analytics under Admin, Data streams.`);
+  }
+  const publicDir = text(ga4.publicDir, "ga4.publicDir").trim();
+  if (!isPublicDir(publicDir)) {
+    throw new KickoffError(`The Kickoff decisions give ${JSON.stringify(publicDir)} as ga4.publicDir; it must be a folder inside the repository that the Site serves as it is, such as public, or . for plain HTML.`);
+  }
+  return { measurementId, publicDir };
 }
 
 function germanPack({ location }: KickoffDecisions): boolean {
@@ -107,6 +127,7 @@ function stackBody(decisions: KickoffDecisions): string {
     `- Build command: ${commands.build ? `\`${commands.build}\`` : "none, this Site has no build step"}`,
     `- Serve command: \`${commands.serve}\` (for Review; it listens on \`{port}\` or \`PORT\`)`,
     `- ${germanPack(decisions) ? LOCALE_PACK_ON : LOCALE_PACK_OFF}`,
+    ...(decisions.ga4 ? [ga4StackLine(decisions.ga4, germanPack(decisions))] : []),
     "",
     `Next step after Kickoff: ${nextStep(decisions)}`,
   ].join("\n");
@@ -116,6 +137,7 @@ async function writeRecord(siteDir: string, decisions: KickoffDecisions, agents:
   await writeAdr(siteDir, STACK_ADR, adr(`Build the Site with ${decisions.stack.chosen}`, decisions, decisions.stack));
   const { host } = decisions;
   await writeAdr(siteDir, HOST_ADR, adr(`Host the Site on ${host.chosen}`, decisions, host, `Next step after Kickoff: ${nextStep(decisions)}`));
+  if (decisions.ga4) await writeGa4Reporter(siteDir, decisions.ga4, germanPack(decisions));
   await writeFile(join(siteDir, CONFIG_FILE), await configWith(siteDir, decisions));
   await writeFile(join(siteDir, AGENTS_FILE), withStackSection(agents, stackBody(decisions)));
 }
@@ -175,7 +197,8 @@ export async function runKickoff(options: { siteDir: string; file: string; track
       `${AGENTS_FILE} already holds this Site's Stack section, and these decisions differ from it, so nothing was changed. A change to the architecture is a new Architecture decision, raised in a Spec.`,
     );
   }
-  await commitRecord(siteDir, [AGENTS_FILE, CONFIG_FILE, STACK_ADR, HOST_ADR], "Record the Site's first Architecture decisions");
+  const reporter = decisions.ga4 ? ga4Paths(decisions.ga4) : [];
+  await commitRecord(siteDir, [AGENTS_FILE, CONFIG_FILE, STACK_ADR, HOST_ADR, ...reporter], "Record the Site's first Architecture decisions");
 
   try {
     await tracker.ensureStageLabels();
@@ -187,5 +210,6 @@ export async function runKickoff(options: { siteDir: string; file: string; track
 
   stdout(`Kickoff is recorded: ${decisions.stack.chosen} on ${decisions.host.chosen}, with ${decisions.agentCli} as the Agent CLI, and the Stage labels exist on GitHub.\n`);
   stdout(`${germanPack(decisions) ? LOCALE_PACK_ON : LOCALE_PACK_OFF}\n`);
+  if (decisions.ga4) stdout(`${ga4Summary(decisions.ga4, germanPack(decisions))}\n`);
   stdout(`Next step: ${nextStep(decisions)}\n`);
 }

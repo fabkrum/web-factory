@@ -162,6 +162,87 @@ describe("factory kickoff", () => {
     expect(run.stdout).toMatch(/not legal advice/);
   });
 
+  describe("web-vitals to Google Analytics 4", () => {
+    const ga4 = { measurementId: "G-AB12CD34EF", publicDir: "public" };
+    const reporter = ["public/web-vitals/ga4.js", "public/web-vitals/web-vitals.js", "public/web-vitals/LICENSE"];
+
+    it("adds the reporter to the Site's public folder and the Stack section when the Builder opts in, and commits it", async () => {
+      const site = newSite();
+
+      const run = await kickoff(site, decisions({ ga4 }));
+
+      expect(run.exitCode, run.stderr).toBe(0);
+      for (const path of reporter) expect(existsSync(join(site, path)), path).toBe(true);
+      expect(read(site, "public/web-vitals/ga4.js")).toContain('"G-AB12CD34EF"');
+      expect(read(site, "public/web-vitals/web-vitals.js")).toMatch(/export\s*\{[^}]*onLCP/);
+      expect(read(site, "public/web-vitals/LICENSE")).toContain("Apache License");
+      expect(read(site, "AGENTS.md")).toContain('<script type="module" src="/web-vitals/ga4.js"></script>');
+      expect(run.stdout).toMatch(/Google Analytics 4 \(G-AB12CD34EF\)/);
+      expect(git(site, "status", "--porcelain")).toBe("");
+      expect(git(site, "log", "-1", "--name-only", "--format=")).toContain("public/web-vitals/ga4.js");
+    });
+
+    it("asks for consent in the reporter and the Stack section when the German Locale pack is on", async () => {
+      const site = newSite();
+
+      const run = await kickoff(site, decisions({ ga4, location: { operatorCountry: "DE", visitorCountries: ["DE"] } }));
+
+      expect(read(site, "public/web-vitals/ga4.js")).toContain("const CONSENT_REQUIRED = true;");
+      expect(read(site, "AGENTS.md")).toContain("grantAnalyticsConsent()");
+      expect(run.stdout).toMatch(/nothing is sent until a Visitor agrees/);
+    });
+
+    it("sends from the first page outside Germany", async () => {
+      const site = newSite();
+
+      await kickoff(site, decisions({ ga4 }));
+
+      expect(read(site, "public/web-vitals/ga4.js")).toContain("const CONSENT_REQUIRED = false;");
+      expect(read(site, "AGENTS.md")).not.toContain("grantAnalyticsConsent");
+    });
+
+    it("writes into the repository's root for plain HTML", async () => {
+      const site = newSite();
+
+      await kickoff(site, decisions({ ga4: { ...ga4, publicDir: "." } }));
+
+      expect(existsSync(join(site, "web-vitals/ga4.js"))).toBe(true);
+      expect(git(site, "status", "--porcelain")).toBe("");
+    });
+
+    it.each([undefined, null, false])("adds nothing when the Builder opts out (ga4: %s)", async (choice) => {
+      const optedIn = newSite();
+      await kickoff(optedIn, decisions({ ga4 }));
+      const site = newSite();
+
+      const run = await kickoff(site, decisions(choice === undefined ? {} : { ga4: choice }));
+
+      expect(run.exitCode, run.stderr).toBe(0);
+      expect(existsSync(join(site, "public"))).toBe(false);
+      expect(read(site, "AGENTS.md")).not.toMatch(/Google Analytics|web-vitals/);
+      expect(run.stdout).not.toMatch(/Google Analytics/);
+      const files = (dir: string) => git(dir, "ls-files").split("\n").filter((path) => !path.startsWith("public/"));
+      expect(files(site)).toEqual(files(optedIn));
+    });
+
+    it.each([
+      ["a measurement ID that is not GA4's", { ...ga4, measurementId: "UA-12345-1" }, /G-/],
+      ["no measurement ID", { publicDir: "public" }, /ga4\.measurementId/],
+      ["no public folder", { measurementId: ga4.measurementId }, /ga4\.publicDir/],
+      ["a public folder outside the repository", { ...ga4, publicDir: "../elsewhere" }, /inside the repository/],
+      ["an absolute public folder", { ...ga4, publicDir: "/var/www" }, /inside the repository/],
+    ])("refuses %s and changes nothing", async (_, choice, reason) => {
+      const site = newSite();
+
+      const run = await kickoff(site, decisions({ ga4: choice }));
+
+      expect(run.exitCode).toBe(1);
+      expect(run.stderr).toMatch(reason);
+      expect(existsSync(join(site, "factory.json"))).toBe(false);
+      expect(existsSync(join(site, "public"))).toBe(false);
+    });
+  });
+
   it("refuses a country that is not a two-letter code, so a spelling never leaves the pack off", async () => {
     const site = newSite();
 

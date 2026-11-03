@@ -18,6 +18,8 @@ Ask one question at a time and wait for the answer. Say why each question matter
 3. How often does its content change, and who changes it?
 4. Where is the person or company that runs the Site, and where are its Visitors? Ask directly whether any Visitors are in Germany, also when the Builder says "everywhere": the answer switches on checks for German law. Note each country as its two-letter code (DE for Germany, AT for Austria), whatever language the Builder answers in.
 
+5. Do they want field data in Google Analytics 4? Explain it first: the Factory measures the live Site from the Chrome UX Report anyway, which lists a Site only once it has many Visitors. With Google Analytics 4, every Visitor's browser sends its web-vitals (how fast the page showed, how stable it stayed, how quickly it answered a tap), so a small Site gets numbers too. It needs a Google Analytics account and the measurement ID of its web data stream (Admin, Data streams; it starts with `G-`). If the German Locale pack will be on, say that nothing is sent until a Visitor agrees in a consent banner, which the Site then needs. No is a fine answer: then nothing is added.
+
 ## 2. Ask which Agent CLI the Builder uses
 
 Ask which one they use: Claude Code (`claude-code`), Codex (`codex`), Antigravity CLI (`antigravity`) or Gemini CLI (`gemini`). There is no default. Do not assume the one you are running in, and do not recommend one: ask, and record their answer.
@@ -49,7 +51,7 @@ Stage labels live on GitHub, so this is the moment a login is first needed. Say 
 
 ## 6. Record the decisions
 
-Write the decisions to `.factory/kickoff.json`, in English, in this shape. Include every option you offered, also the ones not chosen. Leave out `commands.build` when there is no build step and `host.setup` for Firebase Hosting.
+Write the decisions to `.factory/kickoff.json`, in English, in this shape. Include every option you offered, also the ones not chosen. Leave out `commands.build` when there is no build step and `host.setup` for Firebase Hosting. Leave out `ga4` when the Builder said no to Google Analytics 4; otherwise `ga4.publicDir` is the folder the stack serves as it is at the Site's root (`public` for most stacks, `.` for plain HTML).
 
 ```json
 {
@@ -75,7 +77,8 @@ Write the decisions to `.factory/kickoff.json`, in English, in this shape. Inclu
     ],
     "setup": "..."
   },
-  "commands": { "test": "...", "build": "...", "serve": "..." }
+  "commands": { "test": "...", "build": "...", "serve": "..." },
+  "ga4": { "measurementId": "G-...", "publicDir": "public" }
 }
 ```
 
@@ -88,6 +91,8 @@ npx factory kickoff .factory/kickoff.json
 It writes the ADRs, the Stack section in AGENTS.md and `factory.json`, commits them and creates the Stage labels on GitHub. If it refuses, it says why: fix the file or ask the Builder what is missing, then run it again. If it reports that GitHub could not be reached, fix that and run the same command again. Afterwards run `git push` so that GitHub has the record.
 
 Tell the Builder in plain words what was recorded, and pass on what the command says about the Locale pack, including that it is not legal advice.
+
+With `ga4`, the command writes the reporter to `web-vitals/` in the public folder. Load it on every page as the Stack section in AGENTS.md says, check that the Site's tests and build still pass, and commit. With the German Locale pack on, it sends nothing until the Site's consent banner calls `grantAnalyticsConsent()`; the banner and the privacy policy's mention of Google Analytics become part of the Site's first Request.
 
 ## 7. The Builder's next step
 
