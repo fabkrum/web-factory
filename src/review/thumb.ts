@@ -19,6 +19,8 @@ const ANSWER_MARGIN = 1_000;
 const READ_TIMEOUT = 5_000;
 const MEASURES = 40;
 const MEASURE_EVERY = 50;
+/** How often a menu item off the screen is looked at before it counts as unreachable, while the rest of its menu shows. */
+const LOOKS = 3;
 
 /** Lets the hit test see what `pointer-events` hides from it. */
 const ANY_POINTER = "* { pointer-events: auto !important; }";
@@ -82,6 +84,7 @@ async function tapMenu(context: BrowserContext, route: Route): Promise<Failure[]
       if (open && (left || !(await stillOpen(open, place)))) {
         open = await openAt(context, route, menu.place);
         left = false;
+        if (open && !open.items[place]) open = await awaitItem(open, place);
       }
       const item = open?.items[place];
       if (!open || !item) {
@@ -92,7 +95,7 @@ async function tapMenu(context: BrowserContext, route: Route): Promise<Failure[]
         break;
       }
       try {
-        const tap = await tapItem(open.page, item, open.items);
+        const tap = await tapItem(open, item);
         left = tap.left;
         if (tap.failure) failures.push({ reason: tap.failure.reason, location: `${route.path} at "${tap.failure.name}"` });
         break;
@@ -156,15 +159,49 @@ async function stillOpen(menu: Menu, place: number): Promise<boolean> {
   if (!item) return false;
   try {
     await holdStill(menu.page, item);
-    const { links } = await scan(menu.page, menu.closed);
-    return await whileHere(
-      menu.page.evaluate(({ links, item }) => links.includes(item), { links, item }),
-      READ_TIMEOUT,
-    );
+    return await inSight(menu, item);
   } catch (error) {
     if (movedOn(error)) return false;
     throw error;
   }
+}
+
+/**
+ * The reopened menu, read again until it shows a link at `place` or the tap's time is up. A
+ * link that comes and goes by itself, such as a carousel's slide that came into sight behind the
+ * menu as it first opened, is not there at every opening; on a slow machine that is more often
+ * so. Only a link that stays away for that long is gone.
+ */
+async function awaitItem(menu: Menu, place: number): Promise<Menu> {
+  const started = Date.now();
+  try {
+    while (Date.now() - started < TAP_TIMEOUT) {
+      await menu.page.waitForTimeout(MEASURE_EVERY);
+      const { links } = await scan(menu.page, menu.closed);
+      if (links[place]) return { ...menu, items: links };
+    }
+  } catch (error) {
+    if (!movedOn(error)) throw error;
+  }
+  return menu;
+}
+
+/** Whether any other item of the open menu still shows. */
+async function othersShow(menu: Menu, item: Control): Promise<boolean> {
+  const { links } = await scan(menu.page, menu.closed);
+  return whileHere(
+    menu.page.evaluate(({ links, item, items }) => items.some((other) => other !== item && links.includes(other)), { links, item, items: menu.items }),
+    READ_TIMEOUT,
+  );
+}
+
+/** Whether a link is still among what the open menu shows, compared with the page before it opened. */
+async function inSight(menu: Menu, item: Control): Promise<boolean> {
+  const { links } = await scan(menu.page, menu.closed);
+  return whileHere(
+    menu.page.evaluate(({ links, item }) => links.includes(item), { links, item }),
+    READ_TIMEOUT,
+  );
 }
 
 /** Taps a toggle and returns what it opened, or undefined when it took the browser to another page or froze this one. */
@@ -201,9 +238,19 @@ async function tapToggle(page: Page, toggle: Control, place: number): Promise<Me
  * as a carousel's next slide, is read as an item, and the menu covers it. A tap
  * that lands under the item fell through, whatever it lands on.
  */
-async function tapItem(page: Page, item: Control, items: Control[]): Promise<{ failure?: { name: string; reason: string }; left: boolean }> {
+async function tapItem(menu: Menu, item: Control): Promise<{ failure?: { name: string; reason: string }; left: boolean }> {
+  const { page, items } = menu;
   const name = await nameOf(item);
-  const { x, y, onScreen } = await holdStill(page, item);
+  let held = await holdStill(page, item);
+  // A link out of sight while the rest of the menu still shows left the open menu by itself, as a
+  // carousel's slide that rotated in behind it as it opened and out again: no menu item a Visitor
+  // taps, and slower machines meet it more often. Still in sight, such a slide may be back: looked
+  // at again. A menu that closed altogether, as on the scroll, leaves the item unreachable.
+  for (let look = 1; !held.onScreen && look < LOOKS && (await othersShow(menu, item)); look++) {
+    if (!(await inSight(menu, item))) return { left: false };
+    held = await holdStill(page, item);
+  }
+  const { x, y, onScreen } = held;
   if (!onScreen) {
     return {
       left: false,
