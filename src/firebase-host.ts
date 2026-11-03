@@ -5,6 +5,7 @@ import { ConfigError, readSiteConfig } from "./config.ts";
 import { git, gitSucceeds } from "./git.ts";
 import { HostError, type Host } from "./host.ts";
 import { buildSite, ServeError } from "./served-build.ts";
+import { siteEnvironment } from "./secrets.ts";
 
 /** The longest Firebase keeps a preview channel: a Spec may wait this long for Approve. */
 const PREVIEW_EXPIRES = "30d";
@@ -160,7 +161,8 @@ export class FirebaseHost implements Host {
     for (const [lockfile, command, ...args] of CLEAN_INSTALLS) {
       if (!(await exists(join(dir, lockfile)))) continue;
       const failed = await new Promise<string | undefined>((resolve) => {
-        execFile(command, args, { cwd: dir, env: this.#env, timeout: INSTALL_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 }, (error, _stdout, stderr) => {
+        // The Site's dependencies run their own install scripts: they get no secret, as every Site command.
+        execFile(command, args, { cwd: dir, env: siteEnvironment(this.#env), timeout: INSTALL_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 }, (error, _stdout, stderr) => {
           resolve(error ? stderr.trim() || error.message : undefined);
         });
       });

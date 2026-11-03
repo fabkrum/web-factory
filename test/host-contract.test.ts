@@ -131,6 +131,18 @@ describe("the Firebase adapter", () => {
     await expect(host.deployPreview({ siteDir: site, branch: "spec/1" })).rejects.toThrow(/could not install the Site's dependencies with `npm ci`/);
   });
 
+  it("installs the Preview's dependencies without the Factory's secrets", async () => {
+    const { host } = fakeFirebase({ npm_config_cache: mkdtempSync(join(tmpdir(), "web-factory-npm-")), GH_TOKEN: "ghp_secret-the-install-must-not-see" });
+    const site = firebaseSite();
+    const root = { name: "a-site", version: "1.0.0", scripts: { postinstall: `node -e "console.error('GH_TOKEN=' + process.env.GH_TOKEN); process.exit(1)"` } };
+    commitFile(site, "package.json", `${JSON.stringify(root)}\n`);
+    const packages = { "": { name: root.name, version: root.version } };
+    commitFile(site, "package-lock.json", `${JSON.stringify({ name: root.name, version: root.version, lockfileVersion: 3, requires: true, packages })}\n`);
+    git(site, "branch", "spec/1");
+
+    await expect(host.deployPreview({ siteDir: site, branch: "spec/1" })).rejects.toThrow(/GH_TOKEN=undefined/);
+  });
+
   it("publishes to the site named in firebase.json when it names one", async () => {
     const { host } = fakeFirebase();
     const site = firebaseSite();
