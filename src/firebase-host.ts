@@ -181,6 +181,18 @@ export class FirebaseHost implements Host {
     }
   }
 
+  /**
+   * The Firebase CLI's environment: a Site command's, plus the service account key when one is
+   * set. In a Preview, npx runs a firebase-tools the Spec branch installed, if it has one, and the
+   * CLI runs the branch's `predeploy` commands, so that code must not see the Factory's secrets.
+   */
+  #firebaseEnvironment(): Record<string, string> {
+    const env = siteEnvironment(this.#env);
+    const key = this.#env.GOOGLE_APPLICATION_CREDENTIALS;
+    if (key !== undefined) env.GOOGLE_APPLICATION_CREDENTIALS = key;
+    return env;
+  }
+
   /** Runs the Firebase CLI with `--json` and returns its `result`, or stops with Firebase's own reason. */
   #firebase(cwd: string, args: string[]): Promise<unknown> {
     const [command, ...first] = this.#command as [string, ...string[]];
@@ -188,7 +200,7 @@ export class FirebaseHost implements Host {
       execFile(
         command,
         [...first, ...args, "--json", "--non-interactive"],
-        { cwd, env: this.#env, timeout: DEPLOY_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 },
+        { cwd, env: this.#firebaseEnvironment(), timeout: DEPLOY_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 },
         (error, stdout, stderr) => {
           if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
             reject(new HostError(`The Firebase CLI (${command}) could not be started, so the Factory cannot reach Firebase.`));
