@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { join } from "node:path";
+import { aboutOf, type About } from "./about.ts";
 import { renderBoard } from "./board-page.ts";
 import type { Clock } from "./clock.ts";
 import { LOCAL_DIR, readAllLoopStates, type TicketState } from "./loop-state.ts";
@@ -13,6 +14,8 @@ export interface Card {
   number: number;
   title: string;
   url: string;
+  /** Whether it is about the Site or the Factory; missing on an issue filed by hand without the label. */
+  about?: About;
   /** The Spec of a Ticket. */
   spec?: number;
   /** Missing when the Ticket parked on another machine and its park comment carries no count. */
@@ -100,7 +103,8 @@ function stageOf(issue: OpenIssue): Stage | undefined {
 
 async function cardOf(issue: OpenIssue, stage: Stage, recorded: TicketState | undefined, spec: number | undefined, tracker: Tracker, clock: Clock): Promise<Card> {
   const isTicket = issue.parent !== undefined || recorded !== undefined;
-  const base = { number: issue.number, title: issue.title, url: issue.url, ...(spec === undefined ? {} : { spec }), attempts: recorded?.attempts ?? 0 };
+  const about = aboutOf(issue.labels);
+  const base = { number: issue.number, title: issue.title, url: issue.url, ...(about ? { about } : {}), ...(spec === undefined ? {} : { spec }), attempts: recorded?.attempts ?? 0 };
   const inLoop = stage === "build" && isTicket;
   const state = inLoop ? await withParkFromTracker(issue, recorded, tracker) : undefined;
   const failing = { failingChecks: (state ?? recorded)?.failingChecks ?? [] };

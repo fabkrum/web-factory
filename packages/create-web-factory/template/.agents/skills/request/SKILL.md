@@ -28,6 +28,8 @@ Write `.factory/request.json`, in English, keeping their meaning. Translate if t
 }
 ```
 
+Most Requests are about the Site. A Request to change how the Factory builds the Site (the instructions in AGENTS.md, a skill, `factory.json`) is about the Factory: add `"about": "factory"` to the file, and tell the Builder it still travels the same Pipeline, through Review and Approve. Without it, the Request is about the Site.
+
 Then run:
 
 ```sh

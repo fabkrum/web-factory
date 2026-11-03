@@ -54,6 +54,13 @@ export function trackerContract(
       expect(await tracker.getIssue(spec)).toMatchObject({ number: spec, title: `Spec ${run}`, state: "open", labels: ["stage:spec"] });
     });
 
+    it("files a Request with the label saying it is about the Factory, beside its Stage label", async () => {
+      const { tracker } = await subject();
+      const request = await tracker.createIssue({ title: `Factory Request ${run}`, body: "Cut smaller Tickets.", stage: "request", about: "factory" });
+
+      expect((await tracker.getIssue(request)).labels.sort()).toEqual(["about:factory", "stage:request"]);
+    });
+
     it("rewrites an issue when a Request becomes its Spec, and it stays the same issue", async () => {
       const { tracker } = await subject();
       const request = await tracker.createIssue({ title: `Request ${run}`, body: "My words.", stage: "request" });

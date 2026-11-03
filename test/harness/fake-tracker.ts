@@ -1,3 +1,4 @@
+import { aboutLabel, type About } from "../../src/about.ts";
 import { isStageLabel, stageLabel, STAGES, type Stage } from "../../src/stages.ts";
 import { NotLoggedInError, type Issue, type IssueEvent, type OpenIssue, type PullRequest, type Tracker } from "../../src/tracker.ts";
 
@@ -71,10 +72,10 @@ export class FakeTracker implements Tracker {
     for (const issue of this.#issues.values()) issue.labels = issue.labels.filter((label) => !same(label));
   }
 
-  async createIssue({ title, body, stage, parent }: { title: string; body: string; stage: Stage; parent?: number }): Promise<number> {
+  async createIssue({ title, body, stage, parent, about }: { title: string; body: string; stage: Stage; parent?: number; about?: About }): Promise<number> {
     this.#needsLogin();
     if (parent !== undefined) this.issue(parent);
-    return this.#add({ title, body, labels: [stageLabel(stage)], parent });
+    return this.#add({ title, body, labels: [stageLabel(stage), ...(about ? [aboutLabel(about)] : [])], parent });
   }
 
   async updateIssue(number: number, { title, body }: { title: string; body: string }): Promise<void> {

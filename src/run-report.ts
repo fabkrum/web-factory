@@ -186,7 +186,7 @@ export function duration(ms: number): string {
 }
 
 /** A reason's first line, joined to the next for as long as a line only introduces the next, as a park comment does a code review's list. */
-function brief(reason: string): string {
+export function brief(reason: string): string {
   const lines = reason.split("\n").map((line) => line.trim()).filter((line) => line !== "" && !line.startsWith("```"));
   const ending = lines.findIndex((line) => !line.endsWith(":"));
   const text = lines.slice(0, ending === -1 ? lines.length : ending + 1).join(" ");

@@ -47,6 +47,8 @@ a { color: var(--link); }
 .card p { margin: .25rem 0 0; font-size: .875rem; }
 .card details { font-size: .875rem; white-space: pre-line; }
 .card .meta { color: var(--muted); }
+.card .about { display: inline-block; padding: 0 .375rem; border: 1px solid var(--line); border-radius: 1rem; font-size: .75rem; font-weight: 600; }
+.card .about.factory { border-style: dashed; }
 .card .failing { color: var(--alert); font-weight: 600; }
 .reports { margin-top: 1rem; }
 .reports h2 { margin: 0 0 .5rem; font-size: 1.25rem; }
@@ -91,7 +93,7 @@ function cardHtml(card: Card): string {
     : "";
   return `<article class="card">
 <h3><a href="${escape(card.url)}">#${card.number}</a> ${escape(card.title)}</h3>
-<p class="meta">${attempts}</p>
+${card.about ? `<p class="about ${card.about}">${card.about === "factory" ? "About your Factory" : "About your Site"}</p>\n` : ""}<p class="meta">${attempts}</p>
 ${statusOf(card)}${failing}${card.reason ? reasonOf(card.reason) : ""}
 <p class="next">Next: ${escape(card.nextAction)}</p>
 </article>`;

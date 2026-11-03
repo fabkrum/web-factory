@@ -6,6 +6,7 @@ import type { ReviewSite } from "../../src/ticket-loop.ts";
 import type { CruxSource } from "../../src/crux.ts";
 import type { MeasureLab } from "../../src/measure.ts";
 import type { Tracker } from "../../src/tracker.ts";
+import type { FeedbackChannel } from "../../src/factory-feedback.ts";
 import { FakeClock } from "./fake-clock.ts";
 import { FakeHost } from "./fake-host.ts";
 
@@ -24,7 +25,7 @@ export interface FactoryRun {
 /** Runs the real `factory` command in a directory, capturing what it prints, with its boundaries faked. */
 export async function runFactory(
   argv: string[],
-  options: { cwd: string; agentCli?: AgentCli; tracker?: Tracker; clock?: FakeClock; host?: Host; reviewSite?: ReviewSite; releases?: FactoryReleases; measureLab?: MeasureLab; crux?: CruxSource },
+  options: { cwd: string; agentCli?: AgentCli; tracker?: Tracker; clock?: FakeClock; host?: Host; reviewSite?: ReviewSite; releases?: FactoryReleases; measureLab?: MeasureLab; crux?: CruxSource; feedback?: FeedbackChannel },
 ): Promise<FactoryRun> {
   let stdout = "";
   let stderr = "";
@@ -38,6 +39,7 @@ export async function runFactory(
     // Never a real Lighthouse: Publish measures the live Site, which a test does not have.
     measureLab: options.measureLab ?? steadyLab,
     crux: options.crux,
+    feedback: options.feedback,
     // Never the real clock: a test that waits out a rate limit must not sleep.
     clock: options.clock ?? new FakeClock(),
     stdout: (text) => void (stdout += text),

@@ -6,6 +6,7 @@ import { Codex } from "./codex.ts";
 import { ConfigError, readAgentCliChoice, readHostChoice, type AgentCliName } from "./config.ts";
 import { FirebaseHost } from "./firebase-host.ts";
 import { GitHubTracker } from "./github-tracker.ts";
+import { GitHubFeedback } from "./factory-feedback.ts";
 import { GoogleCli } from "./google-cli.ts";
 import { isFirebaseHosting } from "./host.ts";
 import { NpmReleases } from "./releases.ts";
@@ -37,6 +38,7 @@ process.exitCode = await factory(process.argv.slice(2), {
   agentCli,
   tracker: new GitHubTracker({ cwd: process.cwd() }),
   host: hostChoice !== undefined && isFirebaseHosting(hostChoice) ? new FirebaseHost() : undefined,
+  feedback: new GitHubFeedback({ cwd: process.cwd() }),
   releases: new NpmReleases({ cwd: process.cwd() }),
   measureLab: measureLive,
   crux: cruxKey ? new CruxApi({ key: cruxKey }) : undefined,

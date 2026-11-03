@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { aboutLabel, type About } from "./about.ts";
 import { DECISION_STAGES, isStageLabel, stageLabel, STAGES, type Stage } from "./stages.ts";
 import { redactDeep } from "./secrets.ts";
 import { NotLoggedInError, type Issue, type IssueEvent, type OpenIssue, type PullRequest, type Tracker } from "./tracker.ts";
@@ -80,8 +81,10 @@ export class GitHubTracker implements Tracker {
     this.#gh = options.gh ?? ghCli();
   }
 
-  async createIssue({ title, body, stage, parent }: { title: string; body: string; stage: Stage; parent?: number }): Promise<number> {
-    const created = (await this.#api("POST", "issues", { title, body, labels: [stageLabel(stage)] })) as GitHubIssue;
+  async createIssue({ title, body, stage, parent, about }: { title: string; body: string; stage: Stage; parent?: number; about?: About }): Promise<number> {
+    // GitHub creates a label an issue is filed with when the repository lacks it.
+    const labels = [stageLabel(stage), ...(about ? [aboutLabel(about)] : [])];
+    const created = (await this.#api("POST", "issues", { title, body, labels })) as GitHubIssue;
     if (parent !== undefined) await this.#api("POST", `issues/${parent}/sub_issues`, { sub_issue_id: created.id });
     return created.number;
   }

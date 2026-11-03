@@ -1,3 +1,4 @@
+import type { About } from "./about.ts";
 import type { Stage } from "./stages.ts";
 
 /** A Request, Spec or Ticket as the tracker holds it. */
@@ -48,9 +49,10 @@ export class NotLoggedInError extends Error {}
 export interface Tracker {
   /**
    * Files a Request, Spec or Ticket in its Stage. With a `parent` (a Ticket's Spec) the new
-   * issue becomes the parent's sub-issue. Returns its number.
+   * issue becomes the parent's sub-issue. With `about` it also carries the label saying whether
+   * it is about the Site or the Factory. Returns its number.
    */
-  createIssue(issue: { title: string; body: string; stage: Stage; parent?: number }): Promise<number>;
+  createIssue(issue: { title: string; body: string; stage: Stage; parent?: number; about?: About }): Promise<number>;
   /** Replaces an issue's title and body, as when a Request becomes its Spec. */
   updateIssue(issue: number, fields: { title: string; body: string }): Promise<void>;
   /** Takes a Ticket out of its Spec for good, for a cut the Builder changed: it is closed and no longer the Spec's sub-issue. */

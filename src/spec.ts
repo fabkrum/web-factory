@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { adrPath, AGENTS_FILE, commitRecord, fieldReader, findStackSection, hasSectionHeading, kickoffRecorded, readSkillFile, renderAdr, requestContext, withStackSection, writeAdr, type Choice } from "./decision-record.ts";
+import { aboutOf, type About } from "./about.ts";
 import { PipelineError } from "./request.ts";
 import { stageLabel, type Stage } from "./stages.ts";
 import type { Issue, Tracker } from "./tracker.ts";
@@ -170,7 +171,7 @@ export async function runSpec(options: { siteDir: string; file: string; tracker:
   for (const old of await tracker.ticketsOf(issue.number)) await tracker.removeTicket(issue.number, old.number);
   const filed: { number: number }[] = [];
   for (const ticket of spec.tickets) {
-    filed.push({ number: await tracker.createIssue({ title: ticket.title, body: ticketBody(ticket, issue.number), stage: "spec", parent: issue.number }) });
+    filed.push({ number: await tracker.createIssue({ title: ticket.title, body: ticketBody(ticket, issue.number), stage: "spec", parent: issue.number, ...aboutOfSpec(issue) }) });
   }
   for (const [index, ticket] of spec.tickets.entries()) {
     for (const blocker of ticket.blockedBy) await tracker.addBlocker(filed[index]!.number, filed[blocker - 1]!.number);
@@ -205,4 +206,10 @@ export async function confirmCut(options: { spec: number; tracker: Tracker; stdo
   }
   await tracker.moveToStage(spec, "design");
   stdout(`The cut of Spec #${spec} is confirmed. ${next}`);
+}
+
+/** A Ticket is about what its Spec is about, so the board tells a Factory Ticket from a Site one. */
+export function aboutOfSpec(spec: Issue): { about?: About } {
+  const about = aboutOf(spec.labels);
+  return about ? { about } : {};
 }

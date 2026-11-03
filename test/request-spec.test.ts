@@ -62,8 +62,8 @@ describe("factory request", () => {
 
     const number = await filedRequest(dir, tracker);
 
-    expect(tracker.issue(number)).toMatchObject({ title: "A menu page", body: "I want my guests to see the menu.", labels: ["stage:request"], state: "open" });
-    expect(await tracker.labels()).toHaveLength(8);
+    expect(tracker.issue(number)).toMatchObject({ title: "A menu page", body: "I want my guests to see the menu.", labels: ["stage:request", "about:site"], state: "open" });
+    expect(await tracker.labels()).toHaveLength(9);
   });
 
   it("refuses a Request with no words and files nothing", async () => {
@@ -94,7 +94,7 @@ describe("factory request", () => {
     const filed = await run(dir, tracker, "request", request);
 
     expect(filed.exitCode, filed.stderr).toBe(0);
-    expect(await tracker.getIssue(1)).toMatchObject({ title: "A menu page", labels: ["stage:request"] });
+    expect(await tracker.getIssue(1)).toMatchObject({ title: "A menu page", labels: ["stage:request", "about:site"] });
   });
 });
 
@@ -109,7 +109,7 @@ describe("factory spec", () => {
     expect(written.exitCode, written.stderr).toBe(0);
     const spec = tracker.issue(request);
     expect(spec.title).toBe("The menu page");
-    expect(spec.labels).toEqual(["stage:spec"]);
+    expect(spec.labels).toEqual(["about:site", "stage:spec"]);
     expect(spec.body).toContain("The page /menu lists every dish with its price");
     expect(spec.body).toContain("I want my guests to see the menu.");
   });
@@ -123,7 +123,7 @@ describe("factory spec", () => {
 
     const tickets = await tracker.ticketsOf(request);
     expect(tickets.map((ticket) => ticket.title)).toEqual(["Menu page with dishes", "Link from home"]);
-    expect(tickets.map((ticket) => ticket.labels)).toEqual([["stage:spec"], ["stage:spec"]]);
+    expect(tickets.map((ticket) => ticket.labels)).toEqual([["stage:spec", "about:site"], ["stage:spec", "about:site"]]);
     expect(tickets[0]?.blockedBy).toEqual([]);
     expect(tickets[1]?.blockedBy).toEqual([tickets[0]?.number]);
     expect(tickets[1]?.body).toContain("The home page links to /menu");
@@ -147,8 +147,8 @@ describe("factory spec", () => {
     const confirmed = await confirm(dir, tracker, request);
 
     expect(confirmed.exitCode, confirmed.stderr).toBe(0);
-    expect(tracker.issue(request).labels).toEqual(["stage:design"]);
-    expect((await tracker.ticketsOf(request)).map((ticket) => ticket.labels)).toEqual([["stage:spec"], ["stage:spec"]]);
+    expect(tracker.issue(request).labels).toEqual(["about:site", "stage:design"]);
+    expect((await tracker.ticketsOf(request)).map((ticket) => ticket.labels)).toEqual([["stage:spec", "about:site"], ["stage:spec", "about:site"]]);
 
     const after = await runFactory(["loop", String(request)], { cwd: dir, agentCli, tracker });
 
@@ -168,7 +168,7 @@ describe("factory spec", () => {
     expect(changed.exitCode, changed.stderr).toBe(0);
     expect((await tracker.ticketsOf(request)).map((ticket) => ticket.title)).toEqual(["Everything"]);
     for (const ticket of old) expect(tracker.issue(ticket.number).state).toBe("closed");
-    expect(tracker.issue(request).labels).toEqual(["stage:spec"]);
+    expect(tracker.issue(request).labels).toEqual(["about:site", "stage:spec"]);
     expect(tracker.issue(request).body.match(/I want my guests to see the menu\./g)).toHaveLength(1);
   });
 
@@ -187,7 +187,7 @@ describe("factory spec", () => {
     expect(stopped.exitCode).toBe(1);
     expect(stopped.stderr).toMatch(/run this same command again/);
     expect((await confirm(dir, fake, request)).exitCode).toBe(1);
-    expect(fake.issue(request).labels).toEqual(["stage:request"]);
+    expect(fake.issue(request).labels).toEqual(["about:site", "stage:request"]);
 
     const rerun = await run(dir, fake, "spec", specFile(request));
 
@@ -221,7 +221,7 @@ describe("factory spec", () => {
 
     expect(again.exitCode).toBe(0);
     expect(again.stdout).toMatch(/already confirmed/);
-    expect(tracker.issue(request).labels).toEqual(["stage:design"]);
+    expect(tracker.issue(request).labels).toEqual(["about:site", "stage:design"]);
   });
 
   it.each([
@@ -245,7 +245,7 @@ describe("factory spec", () => {
 
     expect(refused.exitCode).toBe(1);
     expect(refused.stderr).toMatch(reason);
-    expect(tracker.issue(request).labels).toEqual(["stage:request"]);
+    expect(tracker.issue(request).labels).toEqual(["stage:request", "about:site"]);
     expect(await tracker.ticketsOf(request)).toEqual([]);
   });
 
@@ -373,7 +373,7 @@ describe("factory spec", () => {
 
       expect(refused.exitCode).toBe(1);
       expect(refused.stderr).toMatch(/kickoff skill/);
-      expect(tracker.issue(request).labels).toEqual(["stage:request"]);
+      expect(tracker.issue(request).labels).toEqual(["stage:request", "about:site"]);
     });
   });
 });
@@ -388,7 +388,7 @@ describe("factory spec confirm", () => {
 
     expect(refused.exitCode).toBe(1);
     expect(refused.stderr).toMatch(/no cut to confirm/);
-    expect(tracker.issue(request).labels).toEqual(["stage:request"]);
+    expect(tracker.issue(request).labels).toEqual(["stage:request", "about:site"]);
   });
 
   it("refuses a Ticket's number, which has no cut of its own", async () => {
@@ -401,7 +401,7 @@ describe("factory spec confirm", () => {
     const refused = await confirm(dir, tracker, ticket!.number);
 
     expect(refused.exitCode).toBe(1);
-    expect(tracker.issue(ticket!.number).labels).toEqual(["stage:spec"]);
+    expect(tracker.issue(ticket!.number).labels).toEqual(["stage:spec", "about:site"]);
   });
 
   it("needs a Spec number", async () => {

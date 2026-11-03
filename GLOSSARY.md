@@ -96,6 +96,10 @@ _Avoid_: monitoring, analytics, retro
 The record of how one run of the Ticket loop went: attempts, fix rounds, parked Tickets with their reasons, flaky tests, time spent waiting on rate limits, and which Review checks failed.
 _Avoid_: night report, loop report, log
 
+**Factory Request**:
+A Request to change the Factory's setup in the Site (its instructions, skills or settings), labelled as about the Factory rather than the Site. Measure proposes one when the Run reports show a pattern; it travels the Pipeline like any other Request.
+_Avoid_: retro, self-improvement PR
+
 **Factory feedback**:
 An anonymised summary of Run reports that the Builder chooses to send to the Factory's maintainers after seeing exactly what it contains.
 _Avoid_: telemetry, analytics, crash report

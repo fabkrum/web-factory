@@ -1,6 +1,6 @@
 import { fieldReader, readSkillFile } from "./decision-record.ts";
 import { PipelineError } from "./request.ts";
-import { inStage, ticketBody } from "./spec.ts";
+import { aboutOfSpec, inStage, ticketBody } from "./spec.ts";
 import { integrationBranch, previewIn } from "./ticket-loop.ts";
 import type { Tracker } from "./tracker.ts";
 
@@ -62,7 +62,7 @@ export async function approveChange(options: { siteDir: string; spec: number; fi
   // The Ticket first, so a run GitHub cuts short leaves the Spec in Approve, and running again finishes it.
   const tickets = await tracker.ticketsOf(spec);
   const ticket = tickets.find((candidate) => candidate.state === "open" && candidate.title === title)?.number
-    ?? (await tracker.createIssue({ title, body: ticketBody({ delivers, acceptance }, spec), stage: "build", parent: spec }));
+    ?? (await tracker.createIssue({ title, body: ticketBody({ delivers, acceptance }, spec), stage: "build", parent: spec, ...aboutOfSpec(issue) }));
   await tracker.moveToStage(spec, "build");
   stdout(`Ticket #${ticket} is in the Build Stage: ${title}. The pull request stays open and gets this change too. Start the Ticket loop with: factory loop ${spec}\n`);
 }

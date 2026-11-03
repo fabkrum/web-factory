@@ -22,6 +22,10 @@ import type { FactoryReleases } from "./releases.ts";
 import { NotLoggedInError, type Tracker } from "./tracker.ts";
 import { CruxError, type CruxSource } from "./crux.ts";
 import { measureAfterPublish, runMeasure, type MeasureLab } from "./measure.ts";
+import { measureFactory } from "./measure-factory.ts";
+import { offersFeedback, offerText, sendFeedback, showFeedback, type FeedbackChannel } from "./factory-feedback.ts";
+import { LOCAL_DIR } from "./loop-state.ts";
+import { readRunReports } from "./run-report.ts";
 
 export interface FactoryDeps {
   cwd: string;
@@ -39,6 +43,8 @@ export interface FactoryDeps {
   reviewSite?: ReviewSite;
   /** Runs Lighthouse on the live Site after a Publish; missing, Publish measures nothing. */
   measureLab?: MeasureLab;
+  /** Where Factory feedback goes (the Factory's repository on GitHub), or a fake in tests; only `factory feedback ... send` uses it. */
+  feedback?: FeedbackChannel;
   /** The Chrome UX Report; missing when no Google API key is set. */
   crux?: CruxSource;
   /** Opens an address in the Builder's browser; missing, the Builder opens the printed address. */
@@ -67,7 +73,16 @@ export const USAGE = `Usage:
   factory measure [<url>]         Check what real Visitors experience on the live Site in the
                                   Chrome UX Report (needs a Google API key in CRUX_API_KEY)
                                   and compare with the previous measurement. A measurement
-                                  that got worse opens a new Request with the evidence
+                                  that got worse opens a new Request with the evidence.
+                                  It also reads the Ticket loop's Run reports and proposes
+                                  a Factory Request when a pattern shows, as the loop does
+                                  after every run
+  factory feedback <spec>         Show everything Factory feedback about the last run of
+                                  Spec <spec> would send to the Factory's maintainers.
+                                  Sends nothing
+  factory feedback <spec> send <code>
+                                  Send exactly that feedback, as an issue on the Factory's
+                                  repository; <code> is the one shown with it
   factory request <request-file>  File the Builder's Request as an issue in the Request Stage;
                                   the request skill writes the file
   factory spec <spec-file>        Write the Spec on its Request's issue and file its Tickets
@@ -148,6 +163,7 @@ export async function factory(argv: string[], deps: FactoryDeps): Promise<number
   if (command === "board") return board(args, deps);
   if (command === "update") return update(args, deps);
   if (command === "measure") return measure(args, deps);
+  if (command === "feedback") return feedback(args, deps);
   if (command !== "loop") {
     deps.stderr(`factory does not know the command "${command}".\n\n${USAGE}`);
     return 2;
@@ -399,7 +415,57 @@ async function measure(args: string[], deps: FactoryDeps): Promise<number> {
     deps.stderr(`factory measure takes at most the live Site's full web address, for example: factory measure https://my-site.web.app\n\n${USAGE}`);
     return 2;
   }
-  return onTracker(deps, (tracker) => runMeasure({ url: url?.href, crux: deps.crux, tracker, clock: deps.clock ?? systemClock, stdout: deps.stdout }));
+  return onTracker(deps, async (tracker) => {
+    await measureFactory({ siteDir: deps.cwd, tracker, stdout: deps.stdout });
+    await runMeasure({ url: url?.href, crux: deps.crux, tracker, clock: deps.clock ?? systemClock, stdout: deps.stdout });
+  });
+}
+
+async function feedback(args: string[], deps: FactoryDeps): Promise<number> {
+  const spec = issueNumber(args[0]);
+  const sending = args[1] === "send" && args.length === 3 && /^[0-9a-f]{8}$/.test(args[2]!);
+  if (spec === undefined || (args.length !== 1 && !sending)) {
+    deps.stderr(`factory feedback needs the number of a Spec, for example: factory feedback 12. To send it, add send and the code it showed: factory feedback 12 send 1a2b3c4d\n\n${USAGE}`);
+    return 2;
+  }
+  try {
+    if (!sending) {
+      await showFeedback({ siteDir: deps.cwd, spec, stdout: deps.stdout });
+      return 0;
+    }
+    if (!deps.feedback) {
+      deps.stderr("This version of the Factory cannot reach GitHub, so the feedback cannot be sent. Nothing was sent.\n");
+      return 1;
+    }
+    await sendFeedback({ siteDir: deps.cwd, spec, code: args[2]!, channel: deps.feedback, stdout: deps.stdout });
+    return 0;
+  } catch (error) {
+    if (error instanceof NotLoggedInError) {
+      deps.stderr("Nothing was sent: sending Factory feedback needs a GitHub login. Log in by running this in your own terminal, because it opens a browser: gh auth login\nThen run this same command again.\n");
+      return 1;
+    }
+    if (error instanceof PipelineError || error instanceof ConfigError) {
+      deps.stderr(`${error.message}\n`);
+      return 1;
+    }
+    deps.stderr(`Nothing was sent: GitHub could not be reached: ${(error as Error).message}\n`);
+    return 1;
+  }
+}
+
+/**
+ * After a run: Measure reads the Run reports for patterns, and after a run with several parked
+ * Tickets the Builder is offered Factory feedback. Neither changes how the run went, so a
+ * failure here is said and the run's exit code stands.
+ */
+async function afterRun(spec: number, deps: FactoryDeps, tracker: Tracker): Promise<void> {
+  try {
+    await measureFactory({ siteDir: deps.cwd, tracker, stdout: deps.stdout });
+  } catch (error) {
+    deps.stderr(`Measure could not read the Run reports for patterns in your Factory: ${(error as Error).message}\nRun factory measure later to try again.\n`);
+  }
+  const report = (await readRunReports(join(deps.cwd, LOCAL_DIR))).filter((candidate) => candidate.spec === spec).at(-1);
+  if (report && offersFeedback(report)) deps.stdout(offerText(spec));
 }
 
 async function loop(spec: number, deps: FactoryDeps): Promise<number> {
@@ -431,6 +497,7 @@ async function loop(spec: number, deps: FactoryDeps): Promise<number> {
       deps.stdout(`Not started, waiting for a blocker: ${list(result.blocked.map((b) => b.ticket))}.\n`);
       for (const { ticket, reason } of result.blocked) deps.stdout(`  #${ticket}: ${reason}\n`);
     }
+    await afterRun(spec, deps, deps.tracker);
     const pr = result.pullRequest;
     if (pr) {
       deps.stdout(

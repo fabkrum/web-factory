@@ -180,7 +180,7 @@ async function compareAndRecord(tracker: Tracker, measurement: Measurement, foun
     // The Request first: a stop before the record is written measures again and files it then.
     const request = requestFor(before, measurement, worse, found?.number);
     await tracker.ensureStageLabels();
-    const number = await tracker.createIssue({ ...request, stage: "request" });
+    const number = await tracker.createIssue({ ...request, stage: "request", about: "site" });
     stdout(`Worse than the previous measurement (${worse.map((r) => `${METRICS[r.metric].name} ${METRICS[r.metric].format(r.before)} → ${METRICS[r.metric].format(r.now)}`).join(", ")}), so Measure opened Request #${number} with the evidence.\n`);
   } else if (before) {
     stdout(`Not worse than the previous measurement (${describe(before)}).\n`);
