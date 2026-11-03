@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ClaudeCode } from "../src/claude-code.ts";
@@ -75,6 +77,16 @@ describe("the Claude Code adapter", () => {
       kind: "failed",
       reason: "Claude Code stopped with an error: Credit balance is too low",
     });
+  });
+
+  it("stops the session instead of running it unconfined on a machine without a sandbox backend", async () => {
+    const worktree = site();
+    const claude = new ClaudeCode({ command: FAKE_CLAUDE, env: { FAKE_CLAUDE_NO_SANDBOX: "1" } });
+
+    const result = await claude.runSession({ ...session(worktree), prompt: "Run: `echo built > built.txt`" });
+
+    expect(result).toEqual({ kind: "failed", reason: "Claude Code stopped with an error: sandbox is enabled but dependencies are missing" });
+    expect(existsSync(join(worktree, "built.txt"))).toBe(false);
   });
 
   it("fails a session whose output is not Claude Code's JSON", async () => {

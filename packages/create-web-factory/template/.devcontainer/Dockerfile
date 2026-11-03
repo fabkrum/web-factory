@@ -2,6 +2,9 @@
 # with this image, and every supported Agent CLI is here, because the Builder picks one at Kickoff.
 FROM mcr.microsoft.com/devcontainers/javascript-node:22
 
+# Claude Code's sandbox on Linux runs on bubblewrap and socat, and without them no session starts.
+RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap socat && rm -rf /var/lib/apt/lists/*
+
 RUN npm install --global --no-audit --no-fund @anthropic-ai/claude-code @openai/codex @google/gemini-cli
 
 # Antigravity CLI is a binary from Google's own installer, which puts it in ~/.local/bin.

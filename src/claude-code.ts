@@ -105,6 +105,8 @@ export class ClaudeCode implements AgentCli {
     return {
       sandbox: {
         enabled: sandbox,
+        // Without this, a machine with no sandbox backend runs the session's shell unconfined.
+        failIfUnavailable: true,
         autoAllowBashIfSandboxed: true,
         allowUnsandboxedCommands: false,
         network: { allowedDomains: this.#allowedDomains },

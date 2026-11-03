@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { setTimeout as wait } from "node:timers/promises";
 import type { SiteConfig } from "./config.ts";
+import { siteEnvironment } from "./secrets.ts";
 import { runShell } from "./shell.ts";
 
 /** How long the Site's build command may run. */
@@ -27,7 +28,8 @@ export async function withServedBuild<T>(worktree: string, config: SiteConfig, u
   const command = config.serveCommand!.replaceAll("{port}", String(port));
   const child = spawn("sh", ["-c", command], {
     cwd: worktree,
-    env: { ...process.env, PORT: String(port) },
+    // The Site's command, so none of the Factory's secrets: what it prints can reach the Ticket.
+    env: { ...siteEnvironment(), PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
   });

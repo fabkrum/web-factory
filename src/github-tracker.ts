@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { DECISION_STAGES, isStageLabel, stageLabel, STAGES, type Stage } from "./stages.ts";
+import { redactDeep } from "./secrets.ts";
 import { NotLoggedInError, type Issue, type IssueEvent, type OpenIssue, type PullRequest, type Tracker } from "./tracker.ts";
 
 /** Runs the GitHub CLI with these arguments and returns what it printed. */
@@ -50,7 +51,13 @@ interface GitHubPullRequest {
 interface GitHubTimelineEvent {
   event?: string;
   body?: string | null;
+  actor?: { login?: string } | null;
+  user?: { login?: string } | null;
+  author_association?: string;
 }
+
+/** The author associations that come with write access to the repository. */
+const WRITE_ACCESS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 /** Decision stages are blue and Automatic stages green, as on the board. */
 const DECISION_COLOR = "0969da";
@@ -156,7 +163,14 @@ export class GitHubTracker implements Tracker {
     const timeline = (await this.#list(`issues/${issue}/timeline`)) as GitHubTimelineEvent[];
     const history: IssueEvent[] = [];
     for (const event of timeline) {
-      if (event.event === "commented") history.push({ kind: "comment", body: event.body ?? "" });
+      if (event.event === "commented") {
+        history.push({
+          kind: "comment",
+          body: event.body ?? "",
+          author: event.user?.login ?? event.actor?.login ?? "",
+          trusted: WRITE_ACCESS.has(event.author_association ?? ""),
+        });
+      }
       if (event.event === "closed") history.push({ kind: "closed" });
       if (event.event === "reopened") history.push({ kind: "reopened" });
     }
@@ -232,7 +246,8 @@ export class GitHubTracker implements Tracker {
   async #api(method: string, path: string, body?: unknown): Promise<unknown> {
     const args = ["api", "-X", method, `repos/${await this.#repository()}/${path}`, ...API_HEADERS];
     if (body !== undefined) args.push("--input", "-");
-    const output = await this.#run(args, body === undefined ? undefined : JSON.stringify(body));
+    // Everything the Factory writes to GitHub may be public, so no secret leaves in it.
+    const output = await this.#run(args, body === undefined ? undefined : JSON.stringify(redactDeep(body)));
     return output.trim() === "" ? undefined : JSON.parse(output);
   }
 

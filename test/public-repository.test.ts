@@ -38,6 +38,11 @@ describe("the Codespaces template", () => {
     const image = read(`packages/create-web-factory/template/.devcontainer/${container.build.dockerfile}`);
     for (const cli of ["@anthropic-ai/claude-code", "@openai/codex", "@google/gemini-cli", "antigravity.google/cli/install.sh"]) expect(image).toContain(cli);
   });
+
+  it("has the two tools Claude Code's sandbox runs on in Linux", () => {
+    const image = read(`packages/create-web-factory/template/.devcontainer/${container.build.dockerfile}`);
+    expect(image).toMatch(/apt-get install .*bubblewrap socat/);
+  });
 });
 
 describe("the Factory repository", () => {

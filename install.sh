@@ -3,7 +3,8 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/fabkrum/web-factory/main/install.sh | sh -s -- my-site
 #
-# It installs what is missing (git, Node, the GitHub CLI, your Agent CLI) and creates a Site.
+# It installs what is missing (git, Node, the GitHub CLI, your Agent CLI and, for Claude Code on
+# Linux, the two tools its sandbox runs on) and creates a Site.
 # It is safe to run again: it checks each tool by running it, repairs what an earlier
 # run left broken, and changes nothing that already works.
 #
@@ -133,6 +134,34 @@ git_works() {
   git --version >/dev/null 2>&1
 }
 
+# Installs system packages on Linux with whichever package manager is there. The first argument
+# names them in messages; every package has the same name in all five managers.
+install_linux_packages() {
+  label=$1
+  shift
+  sudo_prefix=""
+  if [ "$(id -u)" -ne 0 ]; then
+    command -v sudo >/dev/null 2>&1 || die "$label is missing, and installing it needs an administrator. Ask one to install $label, then run this command again."
+    sudo_prefix=sudo
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    # Repairs a package install that an earlier attempt left unfinished.
+    $sudo_prefix dpkg --configure -a
+    $sudo_prefix apt-get update -qq
+    $sudo_prefix apt-get install -y -qq "$@"
+  elif command -v dnf >/dev/null 2>&1; then
+    $sudo_prefix dnf install -y -q "$@"
+  elif command -v pacman >/dev/null 2>&1; then
+    $sudo_prefix pacman -S --noconfirm --needed "$@"
+  elif command -v zypper >/dev/null 2>&1; then
+    $sudo_prefix zypper --non-interactive install "$@"
+  elif command -v apk >/dev/null 2>&1; then
+    $sudo_prefix apk add "$@"
+  else
+    die "$label is missing and this Linux has no package manager this installer knows. Install $label, then run this command again."
+  fi
+}
+
 ensure_git() {
   git_works && return 0
   if [ "$OS" = mac ]; then
@@ -141,28 +170,23 @@ ensure_git() {
     die "git is missing. A window from Apple has opened: press Install there, wait until it finishes, then run this same command again."
   fi
   say "Installing git, which keeps the history of your Site. Your computer may ask for your password."
-  sudo_prefix=""
-  if [ "$(id -u)" -ne 0 ]; then
-    command -v sudo >/dev/null 2>&1 || die "git is missing, and installing it needs an administrator. Ask one to install git, then run this command again."
-    sudo_prefix=sudo
-  fi
-  if command -v apt-get >/dev/null 2>&1; then
-    # Repairs a package install that an earlier attempt left unfinished.
-    $sudo_prefix dpkg --configure -a
-    $sudo_prefix apt-get update -qq
-    $sudo_prefix apt-get install -y -qq git
-  elif command -v dnf >/dev/null 2>&1; then
-    $sudo_prefix dnf install -y -q git
-  elif command -v pacman >/dev/null 2>&1; then
-    $sudo_prefix pacman -S --noconfirm --needed git
-  elif command -v zypper >/dev/null 2>&1; then
-    $sudo_prefix zypper --non-interactive install git
-  elif command -v apk >/dev/null 2>&1; then
-    $sudo_prefix apk add git
-  else
-    die "git is missing and this Linux has no package manager this installer knows. Install git, then run this command again."
-  fi
+  install_linux_packages git git
   git_works || stopped "git did not install."
+}
+
+sandbox_tools_work() {
+  bwrap --version >/dev/null 2>&1 && socat -V >/dev/null 2>&1
+}
+
+# Claude Code's sandbox on Linux runs on these two tools, and the Factory stops a session
+# rather than run it without its sandbox. On a Mac the sandbox is part of the system.
+ensure_sandbox_tools() {
+  [ "$OS" = linux ] && [ "$AGENT" = claude-code ] || return 0
+  sandbox_tools_work && return 0
+  say "Installing bubblewrap and socat, which keep Claude Code inside its sandbox. Your computer may ask for your password."
+  install_linux_packages "bubblewrap and socat" bubblewrap socat
+  hash -r
+  sandbox_tools_work || stopped "bubblewrap and socat did not install."
 }
 
 node_works() {
@@ -307,6 +331,7 @@ main() {
   clear_leftovers
   require_downloader
   ensure_git
+  ensure_sandbox_tools
   ensure_node
   ensure_gh
   ensure_agent

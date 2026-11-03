@@ -11,13 +11,15 @@
  *
  * FAKE_CLAUDE_ERROR makes it end in an error result with that text; FAKE_CLAUDE_STDOUT
  * makes it print exactly that and exit with FAKE_CLAUDE_EXIT (0 by default).
+ * FAKE_CLAUDE_NO_SANDBOX is a machine without a sandbox backend: like Claude Code, it then
+ * stops if `sandbox.failIfUnavailable` is set, and otherwise runs commands unconfined.
  */
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 interface Settings {
-  sandbox?: { enabled?: boolean; filesystem?: { allowWrite?: string[] } };
+  sandbox?: { enabled?: boolean; failIfUnavailable?: boolean; filesystem?: { allowWrite?: string[] } };
   permissions?: { deny?: string[] };
 }
 
@@ -36,6 +38,14 @@ if (process.env.FAKE_CLAUDE_STDOUT !== undefined) {
   process.exit(Number(process.env.FAKE_CLAUDE_EXIT ?? 0));
 }
 if (process.env.FAKE_CLAUDE_ERROR !== undefined) finish(process.env.FAKE_CLAUDE_ERROR, true);
+
+if (process.env.FAKE_CLAUDE_NO_SANDBOX !== undefined && settings.sandbox?.enabled) {
+  if (settings.sandbox.failIfUnavailable) {
+    process.stderr.write("sandbox is enabled but dependencies are missing\n");
+    process.exit(1);
+  }
+  settings.sandbox.enabled = false;
+}
 
 const said: string[] = [];
 const ask = /Ask the Builder: (.+)/.exec(prompt);

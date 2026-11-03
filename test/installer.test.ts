@@ -251,6 +251,60 @@ describe("the installer", () => {
     expect(result.stderr).toContain("copilot");
   });
 
+  describe("on Linux", () => {
+    /** A Linux machine with everything but the sandbox's tools, and an apt-get that installs them. */
+    const linux = (options: { aptInstallsNothing?: boolean; toolsThere?: boolean } = {}) => {
+      const fake = mkdtempSync(join(root, "linux-"));
+      script(join(fake, "uname"), `if [ "$1" = -m ]; then echo x86_64; else echo Linux; fi`);
+      script(join(fake, "git"), "exit 0");
+      script(join(fake, "node"), "echo v22.99.0");
+      script(join(fake, "npm"), FAKE_NPM);
+      script(join(fake, "gh"), "exit 0");
+      script(join(fake, "claude"), "exit 0");
+      script(join(fake, "codex"), "exit 0");
+      script(join(fake, "sudo"), `exec "$@"`);
+      script(join(fake, "dpkg"), "exit 0");
+      const tools = ["bwrap", "socat"];
+      // Broken rather than absent unless wanted, so the machine running this test cannot lend its own.
+      for (const tool of tools) script(join(fake, tool), options.toolsThere ? "exit 0" : "exit 1");
+      const installs = tools.map((tool) => `printf '#!/bin/sh\\nexit 0\\n' >"${fake}/${tool}"; chmod +x "${fake}/${tool}"`).join("; ");
+      script(join(fake, "apt-get"), `echo "apt-get $*" >>"$FAKE_LOG"; [ "$1" = install ] || exit 0; ${options.aptInstallsNothing ? "exit 0" : installs}`);
+      return { PATH: `${fake}:/usr/bin:/bin` };
+    };
+
+    it("installs what Claude Code's sandbox runs on", () => {
+      const result = install(["--agent", "claude-code", "my-site"], { env: linux() });
+
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("bubblewrap and socat");
+      expect(readFileSync(log, "utf8")).toMatch(/^apt-get install .*bubblewrap socat$/m);
+    });
+
+    it("changes nothing when those tools work already", () => {
+      const result = install(["--agent", "claude-code", "my-site"], { env: linux({ toolsThere: true }) });
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(log, "utf8")).not.toContain("apt-get");
+    });
+
+    it("leaves them out for an Agent CLI that does not need them", () => {
+      const result = install(["--agent", "codex", "my-site"], { env: linux() });
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(log, "utf8")).not.toContain("apt-get");
+    });
+
+    it("stays unfinished when they do not install, rather than leave a Claude Code that cannot start", () => {
+      const result = install(["--agent", "claude-code", "my-site"], { env: linux({ aptInstallsNothing: true }) });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("bubblewrap and socat did not install");
+      expect(result.stderr).toContain("Run the same command again");
+      expect(existsSync(unfinished())).toBe(true);
+    });
+  });
+
   it("says native Windows is not supported and points to the ways that work", () => {
     const windows = join(root, "windows");
     mkdirSync(windows, { recursive: true });

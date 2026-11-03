@@ -13,6 +13,7 @@ trackerContract("the fake tracker", async () => {
     mergeByHand: async (pullRequest) => tracker.mergeByHand(pullRequest),
     closePullRequestByHand: async (pullRequest) => tracker.closePullRequestByHand(pullRequest),
     reopenByHand: async (issue) => tracker.reopen(issue),
+    commentAsStranger: async (issue, body) => tracker.commentAsStranger(issue, body),
     createLabel: async (name) => tracker.createLabel(name),
     deleteLabel: async (name) => tracker.deleteLabel(name),
   };
@@ -29,6 +30,7 @@ trackerContract("the GitHub tracker against a fake GitHub", async () => {
     mergeByHand: async (pullRequest) => github.mergeByHand(pullRequest),
     closePullRequestByHand: async (pullRequest) => github.closePullRequestByHand(pullRequest),
     reopenByHand: async (issue) => github.reopenByHand(issue),
+    commentAsStranger: async (issue, body) => github.commentAsStranger(issue, body),
     createLabel: async (name) => github.createLabel(name),
     deleteLabel: async (name) => github.deleteLabel(name),
   };
