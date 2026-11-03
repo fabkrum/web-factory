@@ -2,7 +2,7 @@
 
 Amends ADR 0003, which leaves the stack to the Builder: in v1 that choice is limited to stacks with static output. Firebase Hosting is the recommended default host, and Firebase App Hosting is no longer the recommendation for a Site that needs a server.
 
-Fabian decided this on 2026-11-02, on Ticket #20. The reason: the Ticket loop needs a Preview per Ticket, and App Hosting has none. Firebase's App Hosting overview, read on 2026-11-02, describes one live branch and mentions no preview channels or per-branch previews. Sites that run server code may come back in a later version.
+The maintainer decided this on 2026-11-02, on Ticket #20. The reason: the Ticket loop needs a Preview per Ticket, and App Hosting has none. Firebase's App Hosting overview, read on 2026-11-02, describes one live branch and mentions no preview channels or per-branch previews. Sites that run server code may come back in a later version.
 
 We rejected a second App Hosting backend per Spec as a Preview, because it needs a new design and testing on a real account. We rejected keeping App Hosting without a Ticket loop, because it breaks the promise that every host gives the Builder a Preview URL.
 
