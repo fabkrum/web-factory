@@ -1,0 +1,13 @@
+{
+  "name": "A web-factory Site",
+  "build": { "dockerfile": "Dockerfile" },
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "forwardPorts": [4400],
+  "portsAttributes": {
+    "4400": { "label": "Factory board", "onAutoForward": "notify" }
+  },
+  "postCreateCommand": "npm install --no-audit --no-fund && npx playwright install --with-deps chromium",
+  "remoteUser": "node"
+}

@@ -1,0 +1,56 @@
+name: Bug report
+description: Something in the Factory did not work. Beginners are welcome here; plain words are fine.
+title: "Bug: "
+labels: [needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting this. Please leave out passwords, tokens and anything private from your Site.
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened?
+      description: Paste the message you saw, exactly as it appeared.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What did you do just before it happened?
+      description: The command you ran or what you told your Agent CLI, one step per line.
+    validations:
+      required: true
+  - type: dropdown
+    id: way-in
+    attributes:
+      label: How do you run the Factory?
+      options:
+        - Codespace
+        - Local install on macOS
+        - Local install on Linux
+        - Local install on Windows through WSL
+    validations:
+      required: true
+  - type: dropdown
+    id: agent-cli
+    attributes:
+      label: Which Agent CLI do you use?
+      options:
+        - Antigravity CLI
+        - Gemini CLI
+        - Codex
+        - Claude Code
+        - I did not get that far
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Factory version
+      description: In your Site's package.json, next to @fabkrum/web-factory. Leave it empty if you have no Site yet.

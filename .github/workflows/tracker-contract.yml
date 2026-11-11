@@ -1,0 +1,42 @@
+# The GitHub tracker's real contract test, against a disposable GitHub repository.
+#
+# The maintainer sets it up once, outside any session:
+#   - a throwaway repository with at least one commit on its default branch
+#     (it collects test issues, labels, branches and pull requests on every run),
+#     named in the repository variable CONTRACT_REPO as owner/name;
+#   - a fine-grained token that may write that repository's issues, pull requests
+#     and contents, in the secret CONTRACT_GH_TOKEN.
+# Until both exist the test is skipped and says why in its title.
+#
+# Never on a pull request: a pull request runs its own code, and that code would
+# hold the token.
+name: Tracker contract
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One run at a time: the runs share the disposable repository's labels.
+concurrency:
+  group: tracker-contract
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  github:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Contract tests against the disposable repository
+        run: npx vitest run test/tracker-contract.test.ts
+        env:
+          WEB_FACTORY_CONTRACT_REPO: ${{ vars.CONTRACT_REPO }}
+          GH_TOKEN: ${{ secrets.CONTRACT_GH_TOKEN }}

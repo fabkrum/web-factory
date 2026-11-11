@@ -80,6 +80,14 @@ _Avoid_: mockup, design export, Figma file
 The outcome of a Ticket whose Review checks all succeed.
 _Avoid_: green, done, merged
 
+**Fix round**:
+One more Build session for a Ticket that did not pass, in the same run, with the failing reason in its prompt.
+_Avoid_: retry, rerun, iteration
+
+**Parked**:
+The state of a Ticket the Ticket loop stopped on, after its attempt limit or because a session asked for a decision; it stays open in its Stage, with the reason on it in plain words, until the Builder answers there.
+_Avoid_: failed, blocked, stuck
+
 **Measure**:
 The Stage that measures both the Site, through what Visitors experience, and the Factory, through Run reports, and proposes Requests from both.
 _Avoid_: monitoring, analytics, retro
@@ -88,12 +96,16 @@ _Avoid_: monitoring, analytics, retro
 The record of how one run of the Ticket loop went: attempts, fix rounds, parked Tickets with their reasons, flaky tests, time spent waiting on rate limits, and which Review checks failed.
 _Avoid_: night report, loop report, log
 
+**Factory Request**:
+A Request to change the Factory's setup in the Site (its instructions, skills or settings), labelled as about the Factory rather than the Site. Measure proposes one when the Run reports show a pattern; it travels the Pipeline like any other Request.
+_Avoid_: retro, self-improvement PR
+
 **Factory feedback**:
 An anonymised summary of Run reports that the Builder chooses to send to the Factory's maintainers after seeing exactly what it contains.
 _Avoid_: telemetry, analytics, crash report
 
 **Preview**:
-A non-public copy of the Site that the Builder reads at Approve.
+An unlisted copy of the Site, reachable by anyone with its URL, that the Builder reads at Approve.
 _Avoid_: staging, draft
 
 **Approve**:
